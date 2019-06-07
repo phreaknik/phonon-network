@@ -1,12 +1,10 @@
 # Phonon Network Specification
 
-The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is designed to function on the Ethereum network, leveraging its account-based model.
+The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is designed to function on the Ethereum network, but may also be used on the Bitcoin network.
 
-Phonon uses **hardware enforced security** against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted.
+Phonon uses **hardware enforced security** to prevent against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with Safe Cards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
 
-At initialization time, each card uses the internal, physical entropy to produce a key pair, the public key of which functions as an identity. Each card also has the ability to verify that it holds the private key corresponding to that public key via a challenge/response mechanism. A card's public key (identity) is signed by a certificate authority, specifically one which is comprised of several issuers. All signatures are combined using [**muSig**](https://blockstream.com/2018/01/23/en-musig-key-aggregation-schnorr-signatures/) (which uses **Schnorr signatures**) to produce a single aggregated ECDSA signature. Per Schnorr, the public key corresponding to this aggregated signature may be verified using all of the individual signers' public keys.
-
-Although the Phonon Network is theoretically card-agnostic, it is designed to be used with Safe Cards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
+"Phonons" are discrete packets of value which may be transmitted across the network. They are created by deposits on-chain, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided).
 
 ## Initialization and Card Identity
 
@@ -76,62 +74,170 @@ private void authenticate(APDU apdu) {
 
 Here the card receives a hash and signs it using its authentication key (`certsAuthPrivate`), returning that signature as a response. Thus, the requester can verify that the public key yeilded from the card earlier corresponds to the private key which made this signature.
 
-## Authentication Using a Multi-Party CA
+## Structure of a Phonon
 
-## The Settlement Contract
+Each phonon represents a non-fungible "packet" of tokens. It contains the following data:
+
+1. **Receiving private key:** at deposit time, each phonon must be sent to a different address. The deposit address corresponds to a private key, which is passed between participants in the network as the phonon is spent. So long as private keys aren't reused, any counterparty risk (which should be obviated by hardware-enforced rules, but ya know... crypto people) is constrained to the individual phonon
+2. **Network ID:** an identifier (`uint8`) for the network from which this phonon derives. A recipient of a phonon should be careful to ensure this id corresponds to the network on which he expects the tokens to exist. This id maps to a 32-byte descriptor on the card, which may later be upgraded. In the case of Ethereum, this network id maps to a settlement smart contract address (20 bytes)
+3. **Asset ID:** an identifier (`uint16`) for the asset describing this phonon. A list of accepted asset ids is stored on-chain. In the case of Bitcoin, there is only one asset id (`0`). In Ethereum, it corresponds to a token address or id.
+4. **Amount:** the number of tokens (in atomic units). Because of ether's units, this must be a `uint256`.
+
+
+## Deposits and Withdrawals
+
+### Getting a Deposit Address
+
+Phonons are not deposited to the main card identity address, but rather to a derivative of it:
+
+```
+depositPrivKey = sha256(authPrivKey, nonce)
+```
+
+Deposit keys are generated deterministically. A global `uint32` is kept on the card, which counts a nonce. This nonce is hashed with the main authentication private key to generate a new private key. This is the recipient of the phonon. This recipient private key is transformed first into a public key and then into an addresses, which can be used as a deposit recipient.
+
+## On-Chain Settlements
+
+Phonons may be deposited and withdrawn using a settlement smart contract on Ethereum. Network and asset IDs are also stored in a registry on a smart contract, which should function as a source of truth. (The network id should be fixed for a given network)
+
+### Ethereum-based networks
+
+Ethereum (and Ethereum-derived networks) use smart contracts to manage deposits and withdrawals. Each deposit is mapped to a recipient, asset, and amount. Withdrawing requires a signature on key data, which can be used to prove validity of the withdrawal.
+
+#### Data Structures
+
+Data is stored in the following way on the settlement smart contract:
+
+```
+struct Asset {
+  address contract;
+  uint256 id;         // Identifier for ERC721s
+}
+
+struct Phonon {
+  uint256 assetId;
+  uint256 amount;
+}
+
+mapping(address => Phonon) public phonons;
+mapping(uint256 => Asset) public assets;
+```
+
+Here `assets` are indexed on `assetId`, which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `phonons` are indexed on a recipient address and contain an `Asset` and an amount.
+
+#### Settlement API
+
+Each settlement smart contract should have the following API.
+
+##### Deposits
+
+Once a user generates one or more deposit addresses from his card, he may send a number of tokens to the contract for deposit. Once the deposit occurs, the user may send a message to his card specifying the parameters used to make the deposit.
+
+
+**deposit(address recipient, uint256 assetId, uint256 amount)**
+
+Deposit one or more tokens to `recipient`. The following logic is performed:
+
+1. Look up the asset using `assetId`. If this maps to an empty asset, the transaction will fail.
+2. Look up the balance of the recipient using: `phonons[recipient]`. If this balance is >0, the transaction will fail.
+3. Move asset from the sender's account. Depending on the asset type (ERC20 or ERC721), this will call a different method of the underlying contract.
+
+This produces a transaction on the Ethereum network, which may be sent to the user's card for deposit.
+
+> Note that in the Phonon Network, the onus of verification and proof falls on the recipient of the phonon. The depositor may submit the deposit data immediately after submitting the on-chain transaction. Because no proof is passed, it is assumed that the depositor may act maliciously - recipient cards should check the amount of work behind the deposit before accepting it!
+
+##### Withdrawals
+
+TODO
+
+## Accounting on the Card
+
+Although much of the data is shared between blockchain network and card, it is stored differently on the card.
+
+### Storing Phonons
+
+After the deposit happens on chain, the user can send `recipient`, `assetId`, `amount`, and a network id to the card, which should store that data.
+
+> Network ID maps to an identifier on the card. In the case of Ethereum, this is the settlement contract address. For Bitcoin, it is null.
+
+Phonon storage is described on the card as:
+
+```
+class Phonon {
+  public byte[32] recipient;
+  public short assetId;
+  public byte[32] amount;
+}
+
+private Phonon[] phonons;
+```
+
+Each `Phonon` contains a private key buffer as well as an asset id and amount.
+
+### Storing Network References
+
+The card must keep a number of network "references", which are 32-byte descriptors indexed on a network ID:
+
+```
+private byte[] networks;
+```
+
+Here, each network descriptor is a 32-byte slice of `networks`, which is a 1D array of size `numNetworks * 32`. For example, if we want the identifier for network 3, we would slice `networks[96:128]`.
+
+> Because space is limited on the card, we expect only a small number of networks to be supported at any time.
+
+The card owner may, at any time, update his card's network list using the following API:
+
+**getNetworkReference(short id)**
+
+This returns a 32-byte network descriptor for the given slot. If it is empty, this is 32 zero bytes.
+
+**setNetworkReference(short id, byte[] reference)**
+
+This sets a 32-byte slice of `networks` using the provided `reference` at the provided index (`32 * id`).
 
 ### Deposits
 
+A phonon can be added to the card with the following API call:
+
+**deposit(long recipientIndex, short assetId, byte[] amount)**
+
+This will re-derive the recipient private key using the index. Recall that this was previously derived so that the user could generate a deposit *address*. We now use the corresponding *private key* as the identifier.
+
+The included data is packed into a `Phonon` and is stored at the first unused index.
+
+> Note that there is a maximum number of phonons which may be stored on a given card. If the card runs out of space, this API call will fail, but the user can store the phonon somewhere else and send it to the card at any time - of course this means the user must also persist the `recipientIndex`, which is not part of the phonon deposit metadata!
+
 ### Withdrawals
 
-## Accounting on the Card
+The card may withdraw a phonon at any time by passing the phonon index and calling the "withdraw" functions. Because the data being signed is different depending on the type of network, we have multiple withdraw functions.
+
+**withdraw(short phononIndex, byte[] data)**
+
+Look up the phonon based on an index. If no phonon exists at that index, this call will fail.
+
+#### Ethereum-based Withdrawals
+
+If the provided phonon corresponds to a non-null network descriptor (indicating it is an Ethereum-based network), this function will do the following:
+
+1. Assert that `data` is 20 bytes (it corresponds to the recipient address).
+1. Sign a message with the phonon's private key: `sha256(recipient, networkDescriptor, assetId, amount)`.
+2. Remove the phonon at the provided index
+
+#### Bitcoin Withdrawals
+
+If the provided phonon corresponds to a null network network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
+
+**TODO: Describe the data needed to be passed in and signed**
 
 ### Sending
 
 ### Receiving
 
-### Adding or Removing CA PubKeys
 
-The card should have an updated list of CA keys should the member set ever change
 
-### Managing Settlement Contracts And Assets
+#### Verifying Phonons
 
-The card should only receive or send payments for known assets on known settlement contracts. This data is stored in the following way:
 
-```
-private Address[] settlementContractAddresses;
-private Address[][] assets;
-private long[][] balances;
-```
 
-Where `Address` is a 20-byte piece of data.
 
-> Note that the card will have a fixed number of slots for `settlementContractAddresses` and for each slot, it will have another (possibly different) fixed number of `assets` and `balances`.
-
-Each `settlementContractAddress` maps to a set of `assets` and corresponding `balances`, which are associated based on index.
-
-The card owner may add or remove `settlementContractAddresses` or `assets` using the following criteria:
-
-**Adding** requires an empty slot for either `settlementContractAddresses` or `assets` (depending on which is trying to be added.
-
-**Removing** requires that *all* balances are zero. Removing a settlement contract address requires *all* of its assets have a zero balance. Removing an asset (from within a specified settlement contract address) requires that asset's balance be zero.
-
-> If a balance is non-zero, the card may create a **withdrawal event** to zero the balance. In the case of small balances (i.e. dust), the user may not wish to broadcast this withdrawal. Recall that creating a withdrawal event does not affect global blockchain state until it is sent to the chain.
-
-The user may utilize the following API:
-
-#### addContract(Address addr)
-
-Adds an address to the list of `settlementContractAddress` (at the first unused index). Fails if there is no unused index.
-
-#### addAsset(short settlementIndex, Address assetAddr)
-
-Adds an asset address to a specified index of `settlementContractAddresses`. Fails if the index has no unused `asset` index or if the asset is already present in the list.
-
-#### removeContract(short settlementIndex)
-
-Clears all `assets` from the specified `settlementContractAddresses` index. Fails if any corresponding `balance` is non-zero.
-
-#### removeAsset(short settlementIndex, short assetIndex)
-
-Clears `asset` at specified indices (`settlementContractAddresses` and `assets`). Fails if corresponding `balance` is non-zero.
