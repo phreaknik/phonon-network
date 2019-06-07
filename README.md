@@ -10,6 +10,72 @@ Although the Phonon Network is theoretically card-agnostic, it is designed to be
 
 ## Initialization and Card Identity
 
+To initialize a Java card, you first need a card reader (e.g. HID - link needed). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus Lattice1. 
+
+The card applet source code (e.g. the SafeCard applet) is compiled and flashed onto the card using the reader. This is called **installation**.
+
+After installing the applet, the issuer calls the `init()` function, which looks something like this:
+
+```
+public KeycardApplet(byte[] bArray, short bOffset, byte bLength) {
+    // Setup
+    crypto = new Crypto();
+    secp256k1 = new SECP256k1(crypto);
+    secureChannel = new SecureChannel(PAIRING_MAX_CLIENT_COUNT, crypto, secp256k1);
+    
+    // Allocate space for certs
+    certs = new byte[CERTS_LEN];
+    certsLoaded = 0;
+    
+    // Create and configure authentication keypair
+    certsAuthPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, SECP256k1.SECP256K1_KEY_SIZE, false);
+    certsAuthPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, SECP256k1.SECP256K1_KEY_SIZE, false);
+    secp256k1.setCurveParameters(certsAuthPublic);
+    secp256k1.setCurveParameters(certsAuthPrivate);
+
+    // Load the authentication keypair with data
+    byte[] privBuf = new byte[Crypto.KEY_SECRET_SIZE];
+    crypto.random.generateData(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
+    certsAuthPrivate.setS(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
+    byte[] pubBuf = new byte[Crypto.KEY_PUB_SIZE];
+    secp256k1.derivePublicKey(privBuf, (short) 0, pubBuf, (short) 0);
+    certsAuthPublic.setW(pubBuf, (short) 0, Crypto.KEY_PUB_SIZE);
+
+    ...other stuff...
+  }
+```
+
+Here we generate an "authentication" key pair, which is used to identify the card. `crypto.random.generateData` uses the card's physical fingerprint (entropy) to create a random private key, which fills in the key pair objects.
+
+At this point, the card is **initialized**. While there are other key pairs (related to holding crypto assets), the only one needed for Phonon is the authentication key.
+
+### Proving Identity
+
+The card's identity is captured in `certsAuthPublic` above. Any user with a card reader may request this public key at any time after the card is initialized.
+
+The card may "prove" its identity to any requester with a card reader using a challenge/response mechanism:
+
+```
+private void authenticate(APDU apdu) {
+    ...
+    
+    // Copy the input hash into a buffer
+    byte[] msgHash = new byte[Crypto.KEY_SECRET_SIZE];
+    Util.arrayCopyNonAtomic(apduBuffer, (short) ISO7816.OFFSET_CDATA, msgHash, (short) 0, Crypto.KEY_SECRET_SIZE);
+
+    ...
+    
+    // Add signature of msg hash
+    Signature tmpSig = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
+    tmpSig.init(certsAuthPrivate, Signature.MODE_SIGN);
+    tmpSig.signPreComputedHash(msgHash, (short) 0, MessageDigest.LENGTH_SHA_256, apduBuffer, sigOff);
+   
+    ...
+  }
+```
+
+Here the card receives a hash and signs it using its authentication key (`certsAuthPrivate`), returning that signature as a response. Thus, the requester can verify that the public key yeilded from the card earlier corresponds to the private key which made this signature.
+
 ## Authentication Using a Multi-Party CA
 
 ## The Settlement Contract
