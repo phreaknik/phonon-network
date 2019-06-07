@@ -1,10 +1,12 @@
 # Phonon Network Specification
 
-The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is designed to function on the Ethereum network, but may also be used on the Bitcoin network.
+The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is designed to function on the Ethereum network, but will likely be extended to the Bitcoin network in future versions. Phonon can be thought of as a L2 scaling technique where transactions are completely validated only between participants of a direct transaction. Nothing is shared with users on the Phonon network outside of the participant set for a given transaction.
 
-Phonon uses **hardware enforced security** to prevent against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with Safe Cards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
+To achieve this design topology, Phonon uses **hardware enforced security** to prevent against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with Safe Cards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
 
-"Phonons" are discrete packets of value which may be transmitted across the network. They are created by deposits on-chain, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided).
+Physical fingerprints for entropy come in the form of Physically Uncloneable Functions, or PUFs. A PUF is a physical entity embodied in a physical structure. They are based on variations that occur during semiconductor manufacturing and essentially act as entropy stamped into a physical circuit. This entropy cannot be removed from the PUF, hence the uncloneable descriptor from its name.
+
+"Phonons" are discrete packets of value which may be transmitted across the Phonon network. They are created by on-chain deposits, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided).
 
 # Initialization and Card Identity
 
@@ -25,13 +27,13 @@ public KeycardApplet(byte[] bArray, short bOffset, byte bLength) {
     certs = new byte[CERTS_LEN];
     certsLoaded = 0;
     
-    // Create and configure authentication keypair
+    // Create and configure identity keypair
     certsAuthPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, SECP256k1.SECP256K1_KEY_SIZE, false);
     certsAuthPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, SECP256k1.SECP256K1_KEY_SIZE, false);
     secp256k1.setCurveParameters(certsAuthPublic);
     secp256k1.setCurveParameters(certsAuthPrivate);
 
-    // Load the authentication keypair with data
+    // Load the identity keypair with data
     byte[] privBuf = new byte[Crypto.KEY_SECRET_SIZE];
     crypto.random.generateData(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
     certsAuthPrivate.setS(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
@@ -43,9 +45,9 @@ public KeycardApplet(byte[] bArray, short bOffset, byte bLength) {
   }
 ```
 
-Here we generate an "authentication" key pair, which is used to identify the card. `crypto.random.generateData` uses the card's physical fingerprint (entropy) to create a random private key, which fills in the key pair objects.
+Here we generate an "identity" key pair, which is used to identify the card. `crypto.random.generateData` uses the card's PUF (entropy) to create a random private key, which fills in the key pair objects.
 
-At this point, the card is **initialized**. While there are other key pairs (related to holding crypto assets), the only one needed for Phonon is the authentication key.
+At this point, the card is **initialized**. While there are other key pairs (related to holding crypto assets), the only one needed for Phonon is the identity key.
 
 ## Proving Identity
 
@@ -72,7 +74,7 @@ private void authenticate(APDU apdu) {
   }
 ```
 
-Here the card receives a hash and signs it using its authentication key (`certsAuthPrivate`), returning that signature as a response. Thus, the requester can verify that the public key yeilded from the card earlier corresponds to the private key which made this signature.
+Here the card receives a hash and signs it using its identity key (`certsAuthPrivate`), returning that signature as a response. Thus, the requester can verify that the public key yeilded from the card earlier corresponds to the private key which made this signature.
 
 ## Certifying a Card
 
@@ -97,7 +99,7 @@ Data is stored both on the public blockchain (see: *On-Chain Settlements*) and o
 
 ## Getting a Deposit Address
 
-Phonons are not deposited to the main card identity address, but rather to a derivative of it:
+Phonons are not deposited to the card's identity address, but rather to an address derived from the identity key:
 
 ```
 byte[] getDepositKey(long startingNonce, short n) {
@@ -140,7 +142,7 @@ private byte[] networks;
 
 Here, each network descriptor is a 32-byte slice of `networks`, which is a 1D array of size `numNetworks * 20`. For example, if we want the identifier for network 3, we would slice `networks[96:128]`.
 
-> Descriptors are 20 bytes because at present the Phonon Network only supports Ethereum-based and Bitcoin withdrawals. Network descriptors are only used for Ethereum-based chains and represent the address of the settlement contract. In the future, it may be useful to expand network ids to a more generalizable 32 bytes. Because space is limited on the card, we expect only a small number of networks to be supported at any time.
+> Descriptors are 20 bytes because currently the Phonon Network only supports Ethereum-based withdrawals, with Bitcoin withdrawal support coming in a future update. Network descriptors are only used for Ethereum-based chains and represent the address of the settlement contract. In the future, it may be useful to expand network ids to a more generalizable 32 bytes. Because space is limited on the card, we expect only a small number of networks to be supported at any time.
 
 The card owner may, at any time, update his card's network list using the following API:
 
@@ -178,8 +180,8 @@ If the provided phonon corresponds to a non-null network descriptor (indicating 
 
 1. Assert that `data` is 20 bytes (it corresponds to the recipient address).
 2. Sign a message (`msg`) with the phonon's private key: `sha256(owner, networkDescriptor, assetId, amount)`.
-3. Sign the same message with the card's identity private key
-4. Remove the phonon at the provided index
+3. Sign the same message with the card's identity private key.
+4. Remove the phonon at the provided index.
 
 The following serialized payload is expected from a withdrawal:
 
@@ -208,7 +210,7 @@ serWithdrawal = [
 
 ### Bitcoin Withdrawals
 
-If the provided phonon corresponds to a null network network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
+If the provided phonon corresponds to a null network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
 
 **TODO: Describe the data needed to be passed in and signed**
 
@@ -240,7 +242,7 @@ mapping(address => Phonon) public phonons;
 mapping(uint256 => Asset) public assets;
 ```
 
-Here `assets` are indexed on `assetId`, which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `phonons` are indexed on a recipient address and contain an `Asset` and an amount.
+Here `assets` are indexed on `assetId`, which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `Phonons` are indexed on a recipient address and contain an `Asset` and an amount.
 
 > Assets are generally created and stored on a registry, which can be the same settlement contract. These can be added either by users or administrators or set once at deployment time.
 
@@ -262,7 +264,7 @@ Deposit one or more tokens to `recipient`. The following logic is performed:
 
 This produces a transaction on the Ethereum network, which may be sent to the user's card for deposit.
 
-> Note that in the Phonon Network, the onus of verification and proof falls on the recipient of the phonon. The depositor may submit the deposit data immediately after submitting the on-chain transaction. Because no proof is passed, it is assumed that the depositor may act maliciously - recipient cards should check the amount of work behind the deposit before accepting it!
+> Note that in the Phonon Network, the onus of verification and proof falls on the recipient of the phonon. The depositor may submit the deposit data immediately after submitting the on-chain transaction. Because no proof is passed, it is assumed that the depositor may act maliciously - recipient cards should check the amount of work behind the deposit before accepting it as payment!
 
 #### Withdrawals
 
