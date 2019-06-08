@@ -113,15 +113,55 @@ Phonon storage is described on the card as:
 ```
 class Phonon {
   public byte[32] owner;    // Private key that can spend or withdraw the phonon
-  public short assetId;     // Combination of the asset type (e.g. a type of ERC20) and an optional id (for NFTs)
-  public byte[32] amount;   // Atomic units of token being deposited
+  public int assetId;       // ETH only: uint32 representing a type of ERC20 or NFT id
+  public long amount;       // uint64 representing the asset value
+  public short decimals;    // ETH only: (amount * 10^decimals) represents the value in atomic units
+  public byte[32] txId;     // Transaction hash (or, more generically, "id")
+  public byte idx;          // BTC only: Index of the UTXO in the transaction represented by `txId`
   public short networkId;   // Index (on-card) on which to determine which network these tokens exist on
 }
 
 private Phonon[] phonons;
 ```
 
-> `networkId` maps to an identifier on the card. In the case of Ethereum, this is the settlement contract address. For Bitcoin, it is `null`.
+#### `owner`
+
+The private key associated with the deposit address of this phonon. This key is needed to withdraw (or spend) the phonon.
+
+#### `assetId` (ETH ONLY)
+
+An index for the type of asset on the smart contract. This is specific to the on-chain smart contract in question (see: On-Chain Settlements section). An asset index must be unique on a combination of the address of the contract and an index of a specific token on that contract. It is assumed that a uint32 is large enough to capture all asset ids in a given contract, since those asset ids must be set by the contract manager/owner.
+
+#### `amount`
+
+The amount to transact. For Bitcoin, this uint64 represents the total number of satoshis (the atomic unit). For Ethereum, this may not be enough to describe the atomic units and must be combined with `decimals`.
+
+#### `decmials` (ETH ONLY)
+
+If the coin has >8 decimals, it must utilize this field in the following way:
+
+```
+atomicUnits = amount * (10 ** decimals)
+```
+
+It is up to the depositor to encode these two parameters. So long as the recipient can verify the full amount on-chain, any equivalent multiplicative combination is allowed. For example, the following are equivalent to represent 6.12 ether (which has 18 decimals):
+
+1. `amount = 612`, `decimals = 16`
+2. `amount = 6,120,000`, `decimals = 12`
+
+#### `txId`
+
+The id (usually a hash) of the on-chain transaction in which this phonon was created. This is not strictly necessary for Ethereum, but is good practice to include.
+
+#### `idx` (BTC ONLY)
+
+Index of the Phonon UTXO (in Bitcoin, each Phonon is a UTXO) within the transaction specified in `txId`.
+
+#### `networkId`
+
+An index that maps to a network descriptor on the card. In the case of Ethereum, this is the settlement contract address. For Bitcoin, it is usually 0 or null.
+
+It is important to note that the actual descriptor on the card is used for verification by the recipient of a Phonon Network transction. The sender and recipient must agree on the mappings between network ids and network descriptors in order to agree on the value of the phonon being transferred.
 
 ## Storing Network References
 
@@ -200,6 +240,7 @@ This mechanism prevents against replay attacks, whereby a user could deposit the
 
 The card may withdraw a phonon at any time by passing the phonon index and calling the "withdraw" function:
 
+```
 byte[] withdraw(short phononIndex, byte[] data) {
   Phonon p = phonons[phononIndex];  
   if (p == null) {
@@ -208,6 +249,7 @@ byte[] withdraw(short phononIndex, byte[] data) {
     return doWithdrawal(p, data);  // Depends on type of network
   }
 }
+```
 
 Look up the phonon based on an index. If no phonon exists at that index, this call will fail.
 
@@ -221,7 +263,7 @@ Look up the phonon based on an index. If no phonon exists at that index, this ca
 If the provided phonon corresponds to a non-null network descriptor (indicating it is an Ethereum-based network), this function will do the following:
 
 1. Assert that `data` is 20 bytes (it corresponds to the recipient address).
-2. Sign a message (`msg`) with the phonon's private key: `sha256(owner, networkDescriptor, assetId, amount)`.
+2. Sign a message (`msg`) with the phonon's private key: `sha256(owner, networkDescriptor, assetId, amount, recipient)`. **Note that `amount` here is actually `amount * (10 ** decimals)`!**
 3. Sign the same message with the card's identity private key.
 4. Remove the phonon at the provided index.
 
@@ -232,6 +274,9 @@ serWithdrawal = [
   TLV_NETWORK_DESCRIPTOR,
   NETWORK_DESCRIPTOR_LEN,   // 20
   networkDescriptor,
+  TLV_ETH_ADDR,
+  ETH_ADDR_LEN,             // 20
+  recipient,                // The address to which the withdrawn coins will transfer
   TLV_MSG_HASH, 
   MSG_HASH_LEN,             // 32
   msg,
@@ -241,6 +286,9 @@ serWithdrawal = [
 ]
 ```
 
+This is all the data needed to withdraw a phonon via a smart contract, which can do the following to verify the withdrawal (see: Ethereum-based Networks section for more details).
+
+
 **TODO: Figure out how to get the recovery param (v). Implemented in JS [here](https://github.com/indutny/elliptic/blob/master/lib/elliptic/ec/index.js#L141)**
 
 
@@ -248,14 +296,31 @@ serWithdrawal = [
 
 If the provided phonon corresponds to a null network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
 
-**TODO: Describe the data needed to be passed in and signed. This is actually going to change the spec since Bitcoin requires at least 2 pieces of data to describe the UTXO: the tx hash and UTXO index**
+Bitcoin withdrawals must unencumber the coins by signing the transaction input, which is fully described by `txId` and `idx` in the phonon. The following data is then serialized and returned from the card. This data can be packaged into a transaction by the interface. It is therefore up to the interface to determine the network fee and the recipient!
 
+> **IMPORTANT NOTE:** *Unlike Ethereum, Bitcoin withdrawal data does **not** include the recipient! The recipient must be specified in the transaction output by the interface, making a secure interface more important than it is for Ethereum.*
+
+```
+serWithdrawal = [
+  TLV_TX_ID,
+  TX_ID_LEN,           // 32
+  txId,
+  TLV_UTXO_IDX,
+  UTXO_IDX_LEN,        // 1
+  idx,
+  TLV_SIGNATURE,
+  SIGNATURE_LEN,
+  signedInput
+]
+```
+
+**TODO: determne the ramifications of spending via segwit or not. [This document](https://bitcoincore.org/en/2016/01/26/segwit-benefits/) describes segwith spends as not needing to have knowledge of the full transactions. If legacy spends do require knowledge of the full transaction, we should probably only support segwit.**
 
 # On-Chain Settlements
 
 Phonons may be deposited and withdrawn using a settlement smart contract on Ethereum. Network and asset IDs are also stored in a registry on a smart contract, which should function as a source of truth. (The network id should be fixed for a given network).
 
-## Ethereum-based networks
+## Ethereum-based Networks
 
 Ethereum (and Ethereum-derived networks) use smart contracts to manage deposits and withdrawals. Each deposit is mapped to a recipient, asset, and amount. Withdrawing requires a signature on key data, which can be used to prove validity of the withdrawal.
 
@@ -301,13 +366,16 @@ This produces a transaction on the Ethereum network, which may be sent to the us
 The following data is necessary to withdraw a phonon on an Ethereum-based network:
 
 1. `networkDescriptor` - tells the user which network and which contract to withdraw from
-2. Message hash (`sha256(owner, networkDescriptor, assetId, amount)`)
-3. Signature of message hash by `owner`
+2. `recipient` - the receiving address for this withdrawal
+3. Message hash (`sha256(owner, networkDescriptor, assetId, amount, recipient)`)
+4. Signature of message hash by `owner`
 
 With this data, the contract can do the following:
 
 1. Use `ecrecover` and *(2)* to get the `owner` public key (and address) from *(3)*
-2. Find the `Phonon` object associated to the `owner` address recovered above and construct the following hash: `sha256(owner, address(this), assetId, amount)`. This value should match *(2)*.
+2. Find the `Phonon` object associated to the `owner` address recovered above.
+3. Use `recipient` and data from steps 1 and 2 to construct the following hash: `sha256(owner, address(this), assetId, amount, recipient)`. This value should match *(3)*.
+4. Delete phonon from contract storage and transfer coins to `recipient`.
 
 > Note that the `networkDescriptor` is the settlement contract address, which is validated in step 2 above because smart contracts can identify themselves via `address(this)`.
 
@@ -333,9 +401,18 @@ serPhonon = [
   TLV_ASSET_ID,
   ASSET_ID_LEN,            // 2
   assetId,
+  TLV_TX_ID,
+  TX_ID_LEN,               // 32
+  txId,
+  TLV_UTXO_IDX,
+  UTXO_IDX_LEN,            // 1
+  idx,
   TLV_PHONON_AMOUNT,
-  PHONON_AMOUNT_LEN,       // 32 - we need to allow for large integers
-  amount
+  PHONON_AMOUNT_LEN,       // 4
+  amount,
+  TLV_PHONON_DECIMALS,
+  PHONON_DECIMALS_LEN,     // 2
+  decimals
 ]
 ```
 
@@ -343,6 +420,8 @@ In this serialization scheme, each parameters is prefixed by:
 
 1. An data type identifier (1-byte TLV)
 2. A 1-byte length prefix indicating the number of bytes to follow for that parameter
+
+> The TLV encoding pattern is mostly an artifact of Javacard libraries.
 
 Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is encrypted via AES using the shared ECDH secret between the sender and receiver. Once the encrypted payload is returned by the card, the sender's communication interface sends this payload to the recipient's interface along with the sender's card's identity public key.
 
@@ -353,7 +432,7 @@ After receiving the encrypted payload (and sender's identity public key), the re
 1. Recreate ECDH secret and decrypt payload.
 2. Deserialize decrypted phonon and save to a `temporaryPhonon` object.
 3. Derive the public key corresponding to the `owner` private key (in the phonon)
-4. Return: `ownerPubKey`, `networkDescriptor`, `amount`, and `assetId`
+4. Return phonon data: `ownerPubKey`, `networkDescriptor`, `assetId`, `txId`, `idx`, `amount`, and `decimals`
 
 At this point, it is up to the receiving interface to verify this phonon on the blockchain network it is expecting. There are various criteria (e.g. level of work) for validating a phonon, which are left up to the implementor.
 
