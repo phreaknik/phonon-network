@@ -241,14 +241,14 @@ serWithdrawal = [
 ]
 ```
 
-**TODO: It would be preferable if we could avoid having to use `v`, as all other signatures in our system are 64 bytes. I believe `v` is simply required for `ecrecover`. Unfortunately I'm not sure there is an alternative verification in solidity.**
+**TODO: Figure out how to get the recovery param (v). Implemented in JS [here](https://github.com/indutny/elliptic/blob/master/lib/elliptic/ec/index.js#L141)**
 
 
 ### Bitcoin Withdrawals
 
 If the provided phonon corresponds to a null network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
 
-**TODO: Describe the data needed to be passed in and signed**
+**TODO: Describe the data needed to be passed in and signed. This is actually going to change the spec since Bitcoin requires at least 2 pieces of data to describe the UTXO: the tx hash and UTXO index**
 
 
 # On-Chain Settlements
