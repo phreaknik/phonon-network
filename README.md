@@ -144,21 +144,41 @@ Here, each network descriptor is a 32-byte slice of `networks`, which is a 1D ar
 
 > Descriptors are 20 bytes because currently the Phonon Network only supports Ethereum-based withdrawals, with Bitcoin withdrawal support coming in a future update. Network descriptors are only used for Ethereum-based chains and represent the address of the settlement contract. In the future, it may be useful to expand network ids to a more generalizable 32 bytes. Because space is limited on the card, we expect only a small number of networks to be supported at any time.
 
-The card owner may, at any time, update his card's network list using the following API:
+The card owner may, at any time, update his card's network list using the following API pseudocode:
 
-**getNetworkReference(short id)**
+* Get a 32-byte network descriptor for the given slot. If it is empty, this is 32 zero bytes:
+```
+byte[] getNetworkReference(short id) {
+  short i = 32*id;
+  return networks[i:32+i];
+}
+```
 
-This returns a 32-byte network descriptor for the given slot. If it is empty, this is 32 zero bytes.
-
-**setNetworkReference(short id, byte[] reference)**
-
-This sets a 32-byte slice of `networks` using the provided `reference` at the provided index (`32 * id`).
+* Set a 32-byte slice of `networks` using the provided `reference` at the provided index (`32*id`):
+```
+void setNetworkReference(short id, byte[] reference) {
+  short i = 32*id;
+  networks[i:32+i] = reference;
+}
+```
 
 ## Deposits
 
-A phonon can be added to the card with the following API call:
+A phonon can be added to the card with the following pseudocode:
 
-**deposit(long recipientIndex, short assetId, byte[] amount)**
+```
+deposit(long recipientIndex, short assetId, byte[] amount, short networkId) {
+
+  // Derive the private key associated with the deposit address
+  // using the same nonce index
+  byte[] priv = deriveIdPriv(recipientIndex);
+  
+  // Instantiate the phonon and put it in the next available storage slot
+  Phonon p = new Phonon(priv, assetId, amount, networkId);
+  phonons[nextAvailableIndex] = p;
+  
+}
+```
 
 This will re-derive the recipient private key using the index. Recall that this was previously derived so that the user could generate a deposit *address*. We now use the corresponding *private key* as the identifier.
 
@@ -168,11 +188,23 @@ The included data is packed into a `Phonon` and is stored at the first unused in
 
 ## Withdrawals
 
-The card may withdraw a phonon at any time by passing the phonon index and calling the "withdraw" functions. Because the data being signed is different depending on the type of network, we have multiple withdraw functions.
+The card may withdraw a phonon at any time by passing the phonon index and calling the "withdraw" function:
 
-**withdraw(short phononIndex, byte[] data)**
+byte[] withdraw(short phononIndex, byte[] data) {
+  Phonon p = phonons[phononIndex];  
+  if (p == null) {
+    throw new Error();
+  } else {
+    return doWithdrawal(p, data);  // Depends on type of network
+  }
+}
 
 Look up the phonon based on an index. If no phonon exists at that index, this call will fail.
+
+`data` contains withdrawal parameters, which depends on the type of network:
+
+* Ethereum withdrawal data is a single address (the recipient).
+* Bitcoin withdrawal data usually includes the recipient address, transaction id of the input, index of the UTXO in that transaction, and a fee amount.
 
 ### Ethereum-based Withdrawals
 
@@ -246,17 +278,11 @@ Here `assets` are indexed on `assetId`, which maps to both a contract containing
 
 > Assets are generally created and stored on a registry, which can be the same settlement contract. These can be added either by users or administrators or set once at deployment time.
 
-### Settlement API
-
-Each settlement smart contract should have the following API.
-
-#### Deposits
+### Deposits
 
 Once a user generates one or more deposit addresses from his card, he may send a number of tokens to the contract for deposit. Once the deposit occurs, the user may send a message to his card specifying the parameters used to make the deposit.
 
-**deposit(address recipient, uint256 assetId, uint256 amount)**
-
-Deposit one or more tokens to `recipient`. The following logic is performed:
+In order to deposit one or more tokens to `recipient`, the following logic is performed:
 
 1. Look up the asset using `assetId`. If this maps to an empty asset, the transaction will fail.
 2. Look up the balance of the recipient using: `phonons[recipient]`. If this balance is >0, the transaction will fail.
@@ -266,7 +292,7 @@ This produces a transaction on the Ethereum network, which may be sent to the us
 
 > Note that in the Phonon Network, the onus of verification and proof falls on the recipient of the phonon. The depositor may submit the deposit data immediately after submitting the on-chain transaction. Because no proof is passed, it is assumed that the depositor may act maliciously - recipient cards should check the amount of work behind the deposit before accepting it as payment!
 
-#### Withdrawals
+### Withdrawals
 
 The following data is necessary to withdraw a phonon on an Ethereum-based network:
 
