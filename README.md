@@ -160,6 +160,9 @@ A phonon can be added to the card with the following pseudocode:
 ```
 deposit(long recipientIndex, short assetId, byte[] amount, short networkId) {
 
+  // Check nonce
+  validateDeposit(receiptIndex);
+
   // Derive the private key associated with the deposit address
   // using the same nonce index
   byte[] priv = deriveIdPriv(recipientIndex);
@@ -176,6 +179,22 @@ This will re-derive the recipient private key using the index. Recall that this 
 The included data is packed into a `Phonon` and is stored at the first unused index.
 
 > Note that there is a maximum number of phonons which may be stored on a given card. If the card runs out of space, this API call will fail, but the user can store the phonon somewhere else and send it to the card at any time - of course this means the user must also persist the `recipientIndex`, which is not part of the phonon deposit metadata!
+
+### Nonce Tracking
+
+A global nonce (`recipientIndex` in the code above) is kept on each card. Any deposit **must** be based on a nonce **higher** than the global nonce at that time:
+
+```
+validateDeposit(long n) {
+  if (n <= globalNonce) {
+    throw new Error();
+  } else {
+    globalNonce = n;
+  }
+}
+```
+
+This mechanism prevents against replay attacks, whereby a user could deposit the same phonon multiple times - including after sending it!
 
 ## Withdrawals
 
@@ -218,13 +237,7 @@ serWithdrawal = [
   msg,
   TLV_SIGNATURE,
   SIGNATURE_LEN,            // 65 - we need v for ecrecover (in addition to r and s)
-  ownerSig,                 // signature from `owner` private key on `msg`
-  TLV_SIGNATURE,
-  SIGNATURE_LEN,
-  idSig,                    // signature from this card's identity key on `msg`
-  TLV_CERT,
-  SIGNATURE_LEN,
-  cert                      // Authentication certificate of the card's identity key
+  ownerSig                  // signature from `owner` private key on `msg`
 ]
 ```
 
@@ -301,6 +314,10 @@ With this data, the contract can do the following:
 
 # Transacting on the Phonon Network
 
+## Connections
+
+In order for cards on the Phonon Network to communicate, they must form encrypted communication channels using their identity keypairs. Shared secrets are derived via ECDH and are used for symmetric AES encryption.
+
 ## Sending
 
 To send a phonon, a card must first serialize its data:
@@ -327,22 +344,31 @@ In this serialization scheme, each parameters is prefixed by:
 1. An data type identifier (1-byte TLV)
 2. A 1-byte length prefix indicating the number of bytes to follow for that parameter
 
-Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is returned to the requester.
+Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is encrypted via AES using the shared ECDH secret between the sender and receiver. Once the encrypted payload is returned by the card, the sender's communication interface sends this payload to the recipient's interface along with the sender's card's identity public key.
 
-## Receiving
+## Receiving Payment
 
-By strict definition, a received phonon can be loaded onto the card without any checks. The serialized payload above is transferred (ideally over a secure connection) from the sender to the recipient, whose card deserializes and stores the phonon.
+After receiving the encrypted payload (and sender's identity public key), the recipient's connectivity interface forwards the data to its card. To consume the receipt, the card performs the following:
 
-It is important to note that phonons are sent between transactional counterparties and are received by a card's *interface*. The *interface* is responsible for verifying the authenticity of a phonon and countarparty card. This is because **cards cannot request or send phonons themselves - they must be integrated into an interface, which can be anything from a simple command line application which uses an insecure card reader to the Lattice1 firmware**.
+1. Recreate ECDH secret and decrypt payload.
+2. Deserialize decrypted phonon and save to a `temporaryPhonon` object.
+3. Derive the public key corresponding to the `owner` private key (in the phonon)
+4. Return: `ownerPubKey`, `networkDescriptor`, `amount`, and `assetId`
 
-### Lattice1-based Phonon Receipts
+At this point, it is up to the receiving interface to verify this phonon on the blockchain network it is expecting. There are various criteria (e.g. level of work) for validating a phonon, which are left up to the implementor.
 
-Lattice1-based transactions have specific restrictions, which may function as a reasonable model for other interface implementations. It is strongly suggested that any implementers require at least these validation checks when recieving a phonon at a communication interface:
+Once the recipient's interface is satisfied with this phonon, it should call a `finalizeReceipt()` function, which does the following:
 
-1. The Lattice1 first requests the sending card's identity public key using a challenge/response mechanism, then requests the corresponding certificate. It then verifies that the pubkey matches the cert and also corresponds to the key that signed the challenge.
-2. Given an inbound phonon, the Lattice1 looks up the `networkDescriptor` saved on its card and uses this data to look up the phonon on the expected network/contract. The Lattice1 must verify that this phonon both exists on the correct network with a sufficient amount of finality (e.g. work) and corresponds to the correct number and identity of tokens it was expecting.
+1. Copy `temporaryPhonon` to the first available phonon slot
+2. Reserialize the phonon, hash it with sha256, and sign the message with the identity public key
+3. Encrypt signature using the same ECDH secret from above and return the payload
 
-With both of these criteria met, the Lattice1 can be confident that it is receiving an unspent, correct phonon from a trusted GridPlus card (which contains hardware-enforced, un-editable double-spent rules).
+At this point, the recipient may return this encrypted signature to the original phonon sender. This gives the sender sufficient proof that the phonon was received and processed on the recipient's smart card.
 
+> **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
 
+### Checking Certificates
 
+Although not strictly part of the Phonon Network specification, it is encouraged that interfaces check the certification of counterparty cards. This gives the user confidence that he is transacting with a valid card (i.e. one that is *not* running malicious code).
+
+Any interface is free to implement which certificates to check (e.g. the GridPlus Lattice1 validates the existence of a GridPlus cert) - this could also be configurable for the user, who may trust certain card issuers and not others.
