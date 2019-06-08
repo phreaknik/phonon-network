@@ -18,14 +18,7 @@ After installing the applet, the issuer calls the `init()` function, which looks
 
 ```
 public KeycardApplet(byte[] bArray, short bOffset, byte bLength) {
-    // Setup
-    crypto = new Crypto();
-    secp256k1 = new SECP256k1(crypto);
-    secureChannel = new SecureChannel(PAIRING_MAX_CLIENT_COUNT, crypto, secp256k1);
-    
-    // Allocate space for certs
-    certs = new byte[CERTS_LEN];
-    certsLoaded = 0;
+    ...setup...
     
     // Create and configure identity keypair
     certsAuthPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, SECP256k1.SECP256K1_KEY_SIZE, false);
@@ -82,9 +75,7 @@ Each SafeCard is loaded with a certificate from the GridPlus certificate authori
 
 The cert can be inspected at any time by any user with a card reader. It proves that GridPlus issued the card in question and is a prerequisite for most SafeCard-based interactions on the Lattice1.
 
-> In the Phonon Network, it is **strongly** recommended that all transfers and withdrawals check the certificate of the card sending the message
-
-# Structure of a Phonon
+> GridPlus certificates are not *required* in the Phonon Network, but they *are* utilized in the data transport layer used by Lattice1 devices, which must first check the certification of a counterparty before creating a secure channel and accepting payment.
 
 Each phonon represents a non-fungible "packet" of tokens. It contains the following data:
 
@@ -299,15 +290,13 @@ The following data is necessary to withdraw a phonon on an Ethereum-based networ
 1. `networkDescriptor` - tells the user which network and which contract to withdraw from
 2. Message hash (`sha256(owner, networkDescriptor, assetId, amount)`)
 3. Signature of message hash by `owner`
-4. Signature of message hash by identity key
-5. Cert authorizing the identity public key
 
-With all of this data, the contract can do the following:
+With this data, the contract can do the following:
 
-1. Use `ecrecover` and *(1)* to get the identity public key from *(4)*
-2. Verify that the cert *(5)* is a signature by a known CA (stored in the contract) on the recovered identity public key
-3. Use `ecrecover` and *(2)* to get the `owner` public key (and address) from *(3)*
-4. Find the `Phonon` object associated to the `owner` address recovered above and construct the following hash: `sha256(owner, address(this), assetId, amount)`. This value should match *(2)*.
+1. Use `ecrecover` and *(2)* to get the `owner` public key (and address) from *(3)*
+2. Find the `Phonon` object associated to the `owner` address recovered above and construct the following hash: `sha256(owner, address(this), assetId, amount)`. This value should match *(2)*.
+
+> Note that the `networkDescriptor` is the settlement contract address, which is validated in step 2 above because smart contracts can identify themselves via `address(this)`.
 
 
 # Transacting on the Phonon Network
@@ -342,9 +331,18 @@ Once serialized, the phonon is deleted from its index in the global `phonons` va
 
 ## Receiving
 
-A card receiving a phonon has more strict requirements to validate the phonon's origin as well as the authenticity of the sending card.
+By strict definition, a received phonon can be loaded onto the card without any checks. The serialized payload above is transferred (ideally over a secure connection) from the sender to the recipient, whose card deserializes and stores the phonon.
 
-**TODO: All of the stuff about verification: cert of sending card, transaction on desired network, etc**
+It is important to note that phonons are sent between transactional counterparties and are received by a card's *interface*. The *interface* is responsible for verifying the authenticity of a phonon and countarparty card. This is because **cards cannot request or send phonons themselves - they must be integrated into an interface, which can be anything from a simple command line application which uses an insecure card reader to the Lattice1 firmware**.
+
+### Lattice1-based Phonon Receipts
+
+Lattice1-based transactions have specific restrictions, which may function as a reasonable model for other interface implementations. It is strongly suggested that any implementers require at least these validation checks when recieving a phonon at a communication interface:
+
+1. The Lattice1 first requests the sending card's identity public key using a challenge/response mechanism, then requests the corresponding certificate. It then verifies that the pubkey matches the cert and also corresponds to the key that signed the challenge.
+2. Given an inbound phonon, the Lattice1 looks up the `networkDescriptor` saved on its card and uses this data to look up the phonon on the expected network/contract. The Lattice1 must verify that this phonon both exists on the correct network with a sufficient amount of finality (e.g. work) and corresponds to the correct number and identity of tokens it was expecting.
+
+With both of these criteria met, the Lattice1 can be confident that it is receiving an unspent, correct phonon from a trusted GridPlus card (which contains hardware-enforced, un-editable double-spent rules).
 
 
 
