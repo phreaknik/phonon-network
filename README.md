@@ -281,15 +281,33 @@ serWithdrawal = [
   MSG_HASH_LEN,             // 32
   msg,
   TLV_SIGNATURE,
-  SIGNATURE_LEN,            // 65 - we need v for ecrecover (in addition to r and s)
-  ownerSig                  // signature from `owner` private key on `msg`
+  SIGNATURE_LEN,            // 64
+  ownerSig                  // signature (r,s) from `owner` private key on `msg`
 ]
 ```
 
 This is all the data needed to withdraw a phonon via a smart contract, which can do the following to verify the withdrawal (see: Ethereum-based Networks section for more details).
 
+#### Signature Recovery Parameter
 
-**TODO: Figure out how to get the recovery param (v). Implemented in JS [here](https://github.com/indutny/elliptic/blob/master/lib/elliptic/ec/index.js#L141)**
+Ethereum smart contracts do not have the ability to *verify* a signature relative to a public key, but they are able to *recover* a signer based on a signature and message. They do this using a [recovery parameter](https://ethereum.stackexchange.com/questions/57478/generate-v-parameter-in-ethereum-transaction). This is a single bit (value 0 or 1), represented by `v`, which is usually thrown away when a signature is serialized (e.g. using DER format).
+
+Smart cards return a 64-byte signature containing `r` and `s` params, which are 32 bytes each. It does **not** return a `v` value. Therefore, we need to recreate `v`. Although it isn't very well documented, there *is* a way to calculate `v`: see [here](https://ethereum.stackexchange.com/a/53182). However, because it is a single bit, we can just brute force the value using a mechanism such as the following:
+
+```
+let v = 27;
+if (pubKey == eth.ecrecover(msg, 27, sig.r, sig.s).toString('hex')) {
+  console.log('v is 27');
+} else if (pubKey == eth.ecrecover(msg, 28, sig.r, sig.s).toString('hex')) {
+  console.log('v is 28');
+} else {
+  console.log('Signature is invalid');
+}
+```
+
+The above uses [`ethereumjs-util`](https://www.npmjs.com/package/ethereumjs-util) to perform `ecrecover` on a signature. Although it expects either 27 or 28 for `v`, you can see that its range is still binary. Don't worry too much about the actual values - just find what the range of `v` your library is expecting.
+
+Once requesting a withdrawal signature, the interface must do a check such as the above to determine `v` before passing the withdrawal data to the on-chain smart contract.
 
 
 ### Bitcoin Withdrawals
