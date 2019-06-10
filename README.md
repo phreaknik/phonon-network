@@ -6,9 +6,17 @@ To achieve this design topology, Phonon uses **hardware enforced security** to p
 
 Physical fingerprints for entropy come in the form of Physically Uncloneable Functions, or PUFs. A PUF is a physical entity embodied in a physical structure. They are based on variations that occur during semiconductor manufacturing and essentially act as entropy stamped into a physical circuit. This entropy cannot be removed from the PUF, hence the uncloneable descriptor from its name.
 
-"Phonons" are discrete packets of value which may be transmitted across the Phonon network. They are created by on-chain deposits, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided). 
+### What is a Phonon?
+
+"Phonons" are discrete packets of value which may be transmitted across the Phonon network. They are **created by on-chain deposits**, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided). 
+
+### How are Phonons Transferred?
 
 Phonons are passed between cards via encrypted channels. **Each phonon contains an amount, an asset type, a private key, and some other metadata**. Because private keys are being passed, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is accomplished with a **certificate authority** (generally also the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
+
+### How do Withdrawals Work?
+
+When a user wishes to withdraw a phonon onto the blockchain network from which it originated, they call a function on the card, which generates the relevant payload and makes a signature needed to satisfy the withdrawal conditions (these vary depending on the network and/or withdrawal implementation). **The signature originates from the private key contained in the phonon itself - once the withdrawal occurs, the phonon (including this key) is deleted from the card.** At this point, it is up to the user to package this signature into a transaction and make the withdrawal on-chain.
 
 # Initialization and Card Identity
 
