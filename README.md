@@ -2,7 +2,7 @@
 
 The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is designed to function on the Ethereum network, but will likely be extended to the Bitcoin network in future versions. Phonon can be thought of as a L2 scaling technique where transactions are completely validated only between participants of a direct transaction. Nothing is shared with users on the Phonon network outside of the participant set for a given transaction.
 
-To achieve this design topology, Phonon uses **hardware enforced security** to prevent against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with Safe Cards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
+To achieve this design topology, Phonon uses **hardware enforced security** to prevent against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with SafeCards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
 
 Physical fingerprints for entropy come in the form of Physically Uncloneable Functions, or PUFs. A PUF is a physical entity embodied in a physical structure. They are based on variations that occur during semiconductor manufacturing and essentially act as entropy stamped into a physical circuit. This entropy cannot be removed from the PUF, hence the uncloneable descriptor from its name.
 
@@ -332,7 +332,7 @@ serWithdrawal = [
 ]
 ```
 
-**TODO: determne the ramifications of spending via segwit or not. [This document](https://bitcoincore.org/en/2016/01/26/segwit-benefits/) describes segwith spends as not needing to have knowledge of the full transactions. If legacy spends do require knowledge of the full transaction, we should probably only support segwit.**
+**TODO: determne the ramifications of spending via segwit or not. [This document](https://bitcoincore.org/en/2016/01/26/segwit-benefits/) describes segwit spends as not needing to have knowledge of the full transactions. If legacy spends do require knowledge of the full transaction, we should probably only support segwit.**
 
 # On-Chain Settlements
 
@@ -436,7 +436,7 @@ serPhonon = [
 
 In this serialization scheme, each parameters is prefixed by:
 
-1. An data type identifier (1-byte TLV)
+1. A data type identifier (1-byte TLV)
 2. A 1-byte length prefix indicating the number of bytes to follow for that parameter
 
 > The TLV encoding pattern is mostly an artifact of Javacard libraries.
