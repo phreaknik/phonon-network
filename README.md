@@ -512,15 +512,11 @@ After receiving the encrypted payload (and sender's identity public key), the re
 
 At this point, the recipient may verify that the phonon corresponds to the correct number/type of tokens which exist on the correct network. Once satisfied and ready to store the phonon the recipient calls `receiveTransfer` with the encrypted blob, which decrypts, deserializes, and stores all of the data (including the private key). At this point, the sender should receive the good or service and, ideally, an "ack" message from the receipient.
 
-> Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key** so that the phonon may be decrypted at a later time.
-
 > **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
 
 ### Storing Phonons Off-Card
 
-Like the sender's "view data" function indicated above, the recipient can also view the phonon data (**not** including the private key) before putting the phonon on his card. This is done by passing the encrypted blob and specifying that the card should not store the phonon contained within.
-
-This option may be advantagous
+Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key** so that the phonon may be decrypted at a later time.
 
 ### Checking Certificates
 
