@@ -12,17 +12,35 @@ Physical fingerprints for entropy come in the form of Physically Uncloneable Fun
 
 ### How are Phonons Transferred?
 
-Phonons are passed between cards via encrypted channels. *Each phonon contains an amount, an asset type, a private key, and some other metadata*. Because private keys are being passed, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is accomplished with a **certificate authority** (generally also the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
+Each phonon contains an amount, an asset type, a private key, and some other metadata. Because private keys are being passed, all phonon transmission happens over secure (encrypted) channels between counterparty cards. The data is encrypted/decrypted using a shared AES secret which is the ECDH shared secret of the cards' identity key pairs.
 
 ### How do Withdrawals Work?
 
 When a user wishes to withdraw a phonon onto the blockchain network from which it originated, they call a function on the card, which generates the relevant payload and makes a signature needed to satisfy the withdrawal conditions (these vary depending on the network and/or withdrawal implementation). *The signature originates from the **private key contained in the phonon itself** - once the withdrawal occurs, the phonon (including this key) is deleted from the card.* At this point, it is up to the user to package this signature into a transaction and make the withdrawal on-chain.
 
-# Initialization and Card Identity
+### Where is the Trust?
 
-To initialize a Java card, you first need a card reader (e.g. [HID OMNIKEY](https://www.hidglobal.com/products/readers/omnikey) series). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus Lattice1. 
+Although not strictly part of the Phonon Network, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is generally accomplished with a **certificate authority** (usually the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
 
-The card applet source code (e.g. the SafeCard applet) is compiled and flashed onto the card using the reader. This is called **installation**.
+# Structure of a Phonon
+
+Each phonon represents a non-fungible "packet" of tokens. It contains the following minimum set of data, which may be stored in various ways (covered in later sections):
+
+1. **Receiving private key:** at deposit time, each phonon must be sent to a different address. The deposit address corresponds to a private key, which is passed between participants in the network as the phonon is spent. So long as private keys aren't reused, any counterparty risk (which should be obviated by hardware-enforced rules, but ya know... crypto people) is constrained to the individual phonon
+2. **Network ID:** an identifier for the network from which this phonon derives. A recipient of a phonon should be careful to ensure this id corresponds to the network on which he expects the tokens to exist. In the case of Ethereum, this network id maps to a settlement smart contract address (20 bytes)
+3. **Asset ID:** an identifier for the asset describing this phonon. For Ethereum, a list of accepted asset ids is stored on-chain; these correspond to a token address and, for NFTs, a token id. For Bitcoin, there is only one asset id (`0`).
+4. **Tx Data:** usually a transaction hash and, in the case of Bitcoin, a UTXO index in that transaction.
+4. **Amount:** the number of tokens (in atomic units).
+
+# Provisioning a Card
+
+Phonon is designed to work with [Java cards](https://www.oracle.com/technetwork/java/embedded/javacard/overview/index.html). To initialize a Java card, you first need a card reader (e.g. [HID OMNIKEY](https://www.hidglobal.com/products/readers/omnikey) series). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus [Lattice1](https://gridplus.io/lattice). 
+
+## Installing and Initializing the Applet
+
+Part of the manufacturing/issuing process involves installation and initialization of the Java card applet. Each step occurs only once - if someone attempts to reinstall an applet, the card will lose its identity keystore. 
+
+First, the card applet source code (e.g. the SafeCard applet) is compiled and flashed onto the card using the reader. This is called **installation**.
 
 After installing the applet, the issuer calls the `init()` function, which looks something like this:
 
@@ -50,7 +68,7 @@ public KeycardApplet(byte[] bArray, short bOffset, byte bLength) {
 
 Here we generate an "identity" key pair, which is used to identify the card. `crypto.random.generateData` uses the card's PUF (entropy) to create a random private key, which fills in the key pair objects.
 
-At this point, the card is **initialized**. While there are other key pairs (related to holding crypto assets), the only one needed for Phonon is the identity key.
+At this point, the card is **initialized**. While other key pairs (related to holding crypto assets) may be added later, the only one needed for Phonon is the identity key, which cannot be changed once it is initialized.
 
 ## Proving Identity
 
@@ -81,18 +99,11 @@ Here the card receives a hash and signs it using its identity key (`certsAuthPri
 
 ## Certifying a Card
 
-Each SafeCard is loaded with a certificate from the GridPlus certificate authority. This is nothing more than a signature on the public key of the card (which the card has proven to have) by an ECDSA key pair controlled by GridPlus at the time of card issuance. Once loaded, the cert cannot be modified or removed.
+Each SafeCard is loaded with a certificate from the GridPlus certificate authority. This is nothing more than a signature on the card's identity public key (which the card has proven to have) by an ECDSA key pair controlled by GridPlus at the time of card issuance. Once loaded, the cert cannot be modified or removed.
 
 The cert can be inspected at any time by any user with a card reader. It proves that GridPlus issued the card in question and is a prerequisite for most SafeCard-based interactions on the Lattice1.
 
 > GridPlus certificates are not *required* in the Phonon Network, but they *are* utilized in the data transport layer used by Lattice1 devices, which must first check the certification of a counterparty before creating a secure channel and accepting payment.
-
-Each phonon represents a non-fungible "packet" of tokens. It contains the following data:
-
-1. **Receiving private key:** at deposit time, each phonon must be sent to a different address. The deposit address corresponds to a private key, which is passed between participants in the network as the phonon is spent. So long as private keys aren't reused, any counterparty risk (which should be obviated by hardware-enforced rules, but ya know... crypto people) is constrained to the individual phonon
-2. **Network ID:** an identifier (`uint8`) for the network from which this phonon derives. A recipient of a phonon should be careful to ensure this id corresponds to the network on which he expects the tokens to exist. This id maps to a 32-byte descriptor on the card, which may later be upgraded. In the case of Ethereum, this network id maps to a settlement smart contract address (20 bytes)
-3. **Asset ID:** an identifier (`uint16`) for the asset describing this phonon. A list of accepted asset ids is stored on-chain. In the case of Bitcoin, there is only one asset id (`0`). In Ethereum, it corresponds to a token address or id.
-4. **Amount:** the number of tokens (in atomic units). Because of ether's units, this must be a `uint256`.
 
 # Accounting on the Card
 
@@ -115,6 +126,10 @@ byte[] getDepositKey(long startingNonce, short n) {
 ```
 
 Here we can generate `n` private keys, whose public keys (actually addresses) are needed for deposits on-chain.
+
+### Nonce Tracking
+
+Each deposit key is the hash of a **nonce** with the identity key. A global nonce is kept on each card; every time a phonon is deposited, the global nonce is incremented. More on this later.
 
 ## Storing Phonons
 
@@ -140,7 +155,7 @@ The private key associated with the deposit address of this phonon. This key is 
 
 #### `assetId` (ETH ONLY)
 
-An index for the type of asset on the smart contract. This is specific to the on-chain smart contract in question (see: On-Chain Settlements section). An asset index must be unique on a combination of the address of the contract and an index of a specific token on that contract. It is assumed that a uint32 is large enough to capture all asset ids in a given contract, since those asset ids must be set by the contract manager/owner.
+An index for the type of asset on the smart contract. This is specific to the on-chain smart contract in question (see: *On-Chain Settlements* section). An asset index must be unique on a combination of the address of the contract and an index of a specific token on that contract. It is assumed that a uint32 is large enough to capture all asset ids in a given contract.
 
 #### `amount`
 
@@ -175,15 +190,15 @@ It is important to note that the actual descriptor on the card is used for verif
 
 ## Storing Network References
 
-The card must keep a number of network "references", which are 20-byte descriptors indexed on a network ID:
+The card must keep a number of network "references", which are 32-byte descriptors indexed on a network ID:
 
 ```
 private byte[] networks;
 ```
 
-Here, each network descriptor is a 32-byte slice of `networks`, which is a 1D array of size `numNetworks * 20`. For example, if we want the identifier for network 3, we would slice `networks[96:128]`.
+Here, each network descriptor is a 32-byte slice of `networks`, which is a 1D array of size `numNetworks * 32`. For example, if we want the identifier for network 3, we would slice `networks[96:128]`.
 
-> Descriptors are 20 bytes because currently the Phonon Network only supports Ethereum-based withdrawals, with Bitcoin withdrawal support coming in a future update. Network descriptors are only used for Ethereum-based chains and represent the address of the settlement contract. In the future, it may be useful to expand network ids to a more generalizable 32 bytes. Because space is limited on the card, we expect only a small number of networks to be supported at any time.
+> For the near future, descriptors will likely be either 20 bytes (Ethereum contract addresses - left padded with zeros) or 0 bytes (Bitcoin). However, the slot is kept at 32 bytes for upgradability.
 
 The card owner may, at any time, update his card's network list using the following API pseudocode:
 
@@ -232,7 +247,7 @@ The included data is packed into a `Phonon` and is stored at the first unused in
 
 ### Nonce Tracking
 
-A global nonce (`recipientIndex` in the code above) is kept on each card. Any deposit **must** be based on a nonce **higher** than the global nonce at that time:
+Recall the presence of `globalNonce` to track the last deposit address index that was used. Any deposit **must** be based on a nonce **greater than or equal to** the global nonce at that time:
 
 ```
 validateDeposit(long n) {
@@ -244,7 +259,20 @@ validateDeposit(long n) {
 }
 ```
 
-This mechanism prevents against replay attacks, whereby a user could deposit the same phonon multiple times - including after sending it!
+This mechanism prevents against replay attacks, whereby a user could deposit the same phonon multiple times - including after sending it. However, the user's software should be careful to issue deposits **in order** of the corresponding deposit address index.
+
+### Network Specificity and Verification
+
+On Ethereum, deposits will correspond to calls to a smart contract, which is responsible for managing balances, deposits, and withdrawals. On Bitcoin, deposits are simply transfers to the deposit address (i.e. they look like any other transaction on the network).
+
+You may have notices that no proofs are needed for deposits. This is because on the Phonon Network, it is the responsibility of the **recipient** to validate the following when receiving a phonon:
+
+1. The asset and network are the same as the recipient is expecting.
+2. The value of the phonon is correct.
+3. The deposit has a sufficient amount of work (or, more generally, finality) behind it.
+4. (Technically optional, but important) The counterparty has a card that the recipient trusts.
+
+If these conditions are satisfied, the recipient can send an "ack" message to the sender (covered later) indicating that he is satisfied with the payment.
 
 ## Withdrawals
 
@@ -261,12 +289,9 @@ byte[] withdraw(short phononIndex, byte[] data) {
 }
 ```
 
-Look up the phonon based on an index. If no phonon exists at that index, this call will fail.
+This looks up the phonon based on a storage index, which simply indicates where in the card's memory this data is being stored. If no phonon exists at that index, this call will fail.
 
-`data` contains withdrawal parameters, which depends on the type of network:
-
-* Ethereum withdrawal data is a single address (the recipient).
-* Bitcoin withdrawal data usually includes the recipient address, transaction id of the input, index of the UTXO in that transaction, and a fee amount.
+`data` contains withdrawal parameters, which is the receiving address for Ethereum and is empty for Bitcoin (because the address is specified by the withdrawing party's transaction building software - not the card).
 
 ### Ethereum-based Withdrawals
 
@@ -302,7 +327,9 @@ This is all the data needed to withdraw a phonon via a smart contract, which can
 
 Ethereum smart contracts do not have the ability to *verify* a signature relative to a public key, but they are able to *recover* a signer based on a signature and message. They do this using a [recovery parameter](https://ethereum.stackexchange.com/questions/57478/generate-v-parameter-in-ethereum-transaction). This is a single bit (value 0 or 1), represented by `v`, which is usually thrown away when a signature is serialized (e.g. using DER format).
 
-Smart cards return a 64-byte signature containing `r` and `s` params, which are 32 bytes each. It does **not** return a `v` value. Therefore, we need to recreate `v`. Although it isn't very well documented, there *is* a way to calculate `v`: see [here](https://ethereum.stackexchange.com/a/53182). However, because it is a single bit, we can just brute force the value using a mechanism such as the following:
+Smart cards return a 64-byte signature containing `r` and `s` params, which are 32 bytes each. It does **not** return a `v` value. Therefore, we need to recreate `v`. Although it isn't very well documented, there *is* a way to calculate `v`: see [here](https://ethereum.stackexchange.com/a/53182). 
+
+However, because it is a single bit, we can avoid on-card complexity and just brute force the value on another layer using a mechanism such as the following:
 
 ```
 let v = 27;
@@ -315,7 +342,7 @@ if (pubKey == eth.ecrecover(msg, 27, sig.r, sig.s).toString('hex')) {
 }
 ```
 
-The above uses [`ethereumjs-util`](https://www.npmjs.com/package/ethereumjs-util) to perform `ecrecover` on a signature. Although it expects either 27 or 28 for `v`, you can see that its range is still binary. Don't worry too much about the actual values - just find what the range of `v` your library is expecting.
+The above uses [`ethereumjs-util`](https://www.npmjs.com/package/ethereumjs-util) to perform `ecrecover` on a signature. Although it expects either 27 or 28 for `v`, you can see that its range is still binary. Don't worry too much about the actual values - just find which ones your library is expecting.
 
 Once requesting a withdrawal signature, the interface must do a check such as the above to determine `v` before passing the withdrawal data to the on-chain smart contract.
 
@@ -326,7 +353,7 @@ If the provided phonon corresponds to a null network descriptor, we need to crea
 
 Bitcoin withdrawals must unencumber the coins by signing the transaction input, which is fully described by `txId` and `idx` in the phonon. The following data is then serialized and returned from the card. This data can be packaged into a transaction by the interface. It is therefore up to the interface to determine the network fee and the recipient!
 
-> **IMPORTANT NOTE:** *Unlike Ethereum, Bitcoin withdrawal data does **not** include the recipient! The recipient must be specified in the transaction output by the interface, making a secure interface more important than it is for Ethereum.*
+> **IMPORTANT NOTE:** *Unlike Ethereum, Bitcoin withdrawal data does **not** include the recipient! The recipient must be specified in the transaction output by the interface, making a secure interface like the [Lattice](https://gridplus.io/lattice) more important than it is for Ethereum.*
 
 ```
 serWithdrawal = [
@@ -373,7 +400,7 @@ mapping(uint256 => Asset) public assets;
 
 Here `assets` are indexed on `assetId`, which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `Phonons` are indexed on a recipient address and contain an `Asset` and an amount.
 
-> Assets are generally created and stored on a registry, which can be the same settlement contract. These can be added either by users or administrators or set once at deployment time.
+> Assets are generally created and stored on a registry, which can be the same settlement contract. Depending on the design, the contract deployer may wish to restrict access to registry management or open it up to users so that they can add their own tokens (especially useful for NFTs).
 
 ### Deposits
 
@@ -385,9 +412,7 @@ In order to deposit one or more tokens to `recipient`, the following logic is pe
 2. Look up the balance of the recipient using: `phonons[recipient]`. If this balance is >0, the transaction will fail.
 3. Move asset from the sender's account. Depending on the asset type (ERC20 or ERC721), this will call a different method of the underlying contract.
 
-This produces a transaction on the Ethereum network, which may be sent to the user's card for deposit.
-
-> Note that in the Phonon Network, the onus of verification and proof falls on the recipient of the phonon. The depositor may submit the deposit data immediately after submitting the on-chain transaction. Because no proof is passed, it is assumed that the depositor may act maliciously - recipient cards should check the amount of work behind the deposit before accepting it as payment!
+This produces a transaction on the Ethereum network, the contents of which may be sent to the user's card for deposit.
 
 ### Withdrawals
 
@@ -407,8 +432,13 @@ With this data, the contract can do the following:
 
 > Note that the `networkDescriptor` is the settlement contract address, which is validated in step 2 above because smart contracts can identify themselves via `address(this)`.
 
+## Bitcoin Network
+
+As covered in previous sections, no Phonon-based logic happens on the Bitcoin network. Deposits and withdrawals function as normal Bitcoin transactions.
 
 # Transacting on the Phonon Network
+
+Phonons are sent across the Phonon Network using encrypted communication channels that connect any two cards. Because transfers are validated between only two participants, there is no concept of blocks or block times and "consensus" is a single "ack" message.
 
 ## Connections
 
@@ -421,7 +451,7 @@ To send a phonon, a card must first serialize its data:
 ```
 serPhonon = [ 
   TLV_NETWORK_DESCRIPTOR,
-  NETWORK_DESCRIPTOR_LEN,  // 20
+  NETWORK_DESCRIPTOR_LEN,  // 32 bytes
   networkDescriptor,
   TLV_PRIVATE_KEY, 
   PRIVATE_KEY_LEN,         // 32
@@ -449,9 +479,28 @@ In this serialization scheme, each parameters is prefixed by:
 1. A data type identifier (1-byte TLV)
 2. A 1-byte length prefix indicating the number of bytes to follow for that parameter
 
-> The TLV encoding pattern is mostly an artifact of Javacard libraries.
+> The [TLV encoding](https://docs.oracle.com/javacard/3.0.5/api/javacardx/framework/tlv/BERTLV.html) pattern is used mostly because it is an artifact of Java card libraries.
 
 Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is encrypted via AES using the shared ECDH secret between the sender and receiver. Once the encrypted payload is returned by the card, the sender's communication interface sends this payload to the recipient's interface along with the sender's card's identity public key.
+
+### Viewing Phonon Data
+
+Because the phonon is *deleted* when the transfer is initiated, the sender could find himself in a situation where the recipient doesn't agree to the value of the phonon and the sender would lose that phonon forever!
+
+To avoid this situation, the card may also serialize the above data **without the private key** (and with the *public key* instead):
+
+```
+bytes[] sendPhonon(short phononIdx, bool withPriv) {
+  if (withPriv == false) {
+    return serialize(phononIdx, false);  // Get data with public key
+  } else {
+    bytes[] retData = serialize(phononIdx, true);  // Get data with private key
+    phonons[phononIdx] = null;    // Delete the phonon
+    return resData;
+}
+```
+
+Using this option, the user may send phonon data for verification without sending the phonon itself.
 
 ## Receiving Payment
 
@@ -470,7 +519,7 @@ Once the recipient's interface is satisfied with this phonon, it should call a `
 2. Reserialize the phonon, hash it with sha256, and sign the message with the identity public key
 3. Encrypt signature using the same ECDH secret from above and return the payload
 
-At this point, the recipient may return this encrypted signature to the original phonon sender. This gives the sender sufficient proof that the phonon was received and processed on the recipient's smart card.
+Finally, the recipient may return this encrypted signature to the original phonon sender using an "ack" message. This gives the sender sufficient proof that the phonon was received and processed on the recipient's smart card.
 
 > **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
 
