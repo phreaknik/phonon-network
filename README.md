@@ -6,7 +6,9 @@ To achieve this design topology, Phonon uses **hardware enforced security** to p
 
 Physical fingerprints for entropy come in the form of Physically Uncloneable Functions, or PUFs. A PUF is a physical entity embodied in a physical structure. They are based on variations that occur during semiconductor manufacturing and essentially act as entropy stamped into a physical circuit. This entropy cannot be removed from the PUF, hence the uncloneable descriptor from its name.
 
-"Phonons" are discrete packets of value which may be transmitted across the Phonon network. They are created by on-chain deposits, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided).
+"Phonons" are discrete packets of value which may be transmitted across the Phonon network. They are created by on-chain deposits, which are associated with a particular public key (a derivative of the recipient card's identity public key - more on this later). Each deposit may contain one or more non-fungible phonons, which are similar to the concept of a "bill" (i.e. has a specific denomination and cannot be divided). 
+
+Phonons are passed between cards via encrypted channels. **Each phonon contains an amount, an asset type, a private key, and some other metadata**. Because private keys are being passed, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is accomplished with a **certificate authority** (generally also the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
 
 # Initialization and Card Identity
 
