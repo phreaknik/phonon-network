@@ -369,7 +369,7 @@ serWithdrawal = [
 ]
 ```
 
-**TODO: determne the ramifications of spending via segwit or not. [This document](https://bitcoincore.org/en/2016/01/26/segwit-benefits/) describes segwit spends as not needing to have knowledge of the full transactions. If legacy spends do require knowledge of the full transaction, we should probably only support segwit.**
+**TODO: determine the ramifications of spending via segwit or not. [This document](https://bitcoincore.org/en/2016/01/26/segwit-benefits/) describes segwit spends as not needing to have knowledge of the full transactions. If legacy spends do require knowledge of the full transaction, we should probably only support segwit.**
 
 # On-Chain Settlements
 
@@ -506,22 +506,21 @@ Using this option, the user may send phonon data for verification without sendin
 
 After receiving the encrypted payload (and sender's identity public key), the recipient's connectivity interface forwards the data to its card. To consume the receipt, the card performs the following:
 
-1. Recreate ECDH secret and decrypt payload.
-2. Deserialize decrypted phonon and save to a `temporaryPhonon` object.
-3. Derive the public key corresponding to the `owner` private key (in the phonon)
-4. Return phonon data: `ownerPubKey`, `networkDescriptor`, `assetId`, `txId`, `idx`, `amount`, and `decimals`
+1. Recreate ECDH secret, decrypt, and deserialize the payload.
+2. Derive the public key corresponding to the `owner` private key (in the phonon)
+3. Return phonon data: `ownerPubKey`, `networkDescriptor`, `assetId`, `txId`, `idx`, `amount`, and `decimals`
 
-At this point, it is up to the receiving interface to verify this phonon on the blockchain network it is expecting. There are various criteria (e.g. level of work) for validating a phonon, which are left up to the implementor.
+At this point, the recipient may verify that the phonon corresponds to the correct number/type of tokens which exist on the correct network. Once satisfied and ready to store the phonon the recipient calls `receiveTransfer` with the encrypted blob, which decrypts, deserializes, and stores all of the data (including the private key). At this point, the sender should receive the good or service and, ideally, an "ack" message from the receipient.
 
-Once the recipient's interface is satisfied with this phonon, it should call a `finalizeReceipt()` function, which does the following:
-
-1. Copy `temporaryPhonon` to the first available phonon slot
-2. Reserialize the phonon, hash it with sha256, and sign the message with the identity public key
-3. Encrypt signature using the same ECDH secret from above and return the payload
-
-Finally, the recipient may return this encrypted signature to the original phonon sender using an "ack" message. This gives the sender sufficient proof that the phonon was received and processed on the recipient's smart card.
+> Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key** so that the phonon may be decrypted at a later time.
 
 > **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
+
+### Storing Phonons Off-Card
+
+Like the sender's "view data" function indicated above, the recipient can also view the phonon data (**not** including the private key) before putting the phonon on his card. This is done by passing the encrypted blob and specifying that the card should not store the phonon contained within.
+
+This option may be advantagous
 
 ### Checking Certificates
 
