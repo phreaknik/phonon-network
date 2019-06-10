@@ -12,15 +12,15 @@ Physical fingerprints for entropy come in the form of Physically Uncloneable Fun
 
 ### How are Phonons Transferred?
 
-Phonons are passed between cards via encrypted channels. **Each phonon contains an amount, an asset type, a private key, and some other metadata**. Because private keys are being passed, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is accomplished with a **certificate authority** (generally also the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
+Phonons are passed between cards via encrypted channels. *Each phonon contains an amount, an asset type, a private key, and some other metadata*. Because private keys are being passed, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is accomplished with a **certificate authority** (generally also the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
 
 ### How do Withdrawals Work?
 
-When a user wishes to withdraw a phonon onto the blockchain network from which it originated, they call a function on the card, which generates the relevant payload and makes a signature needed to satisfy the withdrawal conditions (these vary depending on the network and/or withdrawal implementation). **The signature originates from the private key contained in the phonon itself - once the withdrawal occurs, the phonon (including this key) is deleted from the card.** At this point, it is up to the user to package this signature into a transaction and make the withdrawal on-chain.
+When a user wishes to withdraw a phonon onto the blockchain network from which it originated, they call a function on the card, which generates the relevant payload and makes a signature needed to satisfy the withdrawal conditions (these vary depending on the network and/or withdrawal implementation). *The signature originates from the **private key contained in the phonon itself** - once the withdrawal occurs, the phonon (including this key) is deleted from the card.* At this point, it is up to the user to package this signature into a transaction and make the withdrawal on-chain.
 
 # Initialization and Card Identity
 
-To initialize a Java card, you first need a card reader (e.g. HID - link needed). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus Lattice1. 
+To initialize a Java card, you first need a card reader (e.g. [HID OMNIKEY](https://www.hidglobal.com/products/readers/omnikey) series). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus Lattice1. 
 
 The card applet source code (e.g. the SafeCard applet) is compiled and flashed onto the card using the reader. This is called **installation**.
 
