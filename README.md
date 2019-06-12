@@ -105,6 +105,12 @@ The cert can be inspected at any time by any user with a card reader. It proves 
 
 > GridPlus certificates are not *required* in the Phonon Network, but they *are* utilized in the data transport layer used by Lattice1 devices, which must first check the certification of a counterparty before creating a secure channel and accepting payment.
 
+### Trusted Certificate Signers
+
+When the certificate is loaded, its signer (whose public key is also included in the payload) is also verified to have signed the certificate. As long as this check passes, the certificate loading should succeed. The signer's public key is stored globally to validate interactions with other cards later on.
+
+> In the future, additional certificate signers may be added to SafeCards on the Phonon Network. These will need to be signed the by original certificate signer (GridPlus), as allowing arbitrary certificate signers to validate cards introduces many new attack vectors. However, it is GridPlus' intention to interoperate with other card issuers (e.g. Status) in the context of the Phonon Network should they be interested. 
+
 # Accounting on the Card
 
 Data is stored both on the public blockchain (see: *On-Chain Settlements*) and on the card. This section covers data types, deposits, and withdrawals on Phonon-compatable cards.
@@ -481,7 +487,7 @@ In this serialization scheme, each parameters is prefixed by:
 
 > The [TLV encoding](https://docs.oracle.com/javacard/3.0.5/api/javacardx/framework/tlv/BERTLV.html) pattern is used mostly because it is an artifact of Java card libraries.
 
-Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is encrypted via AES using the shared ECDH secret between the sender and receiver. Once the encrypted payload is returned by the card, the sender's communication interface sends this payload to the recipient's interface along with the sender's card's identity public key.
+Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is encrypted via AES using the shared ECDH secret between the sender and receiver. Once the encrypted payload is returned by the card, the sender's communication interface sends this payload to the recipient's interface along with the sender's card's identity public key and matching certificate.
 
 ### Viewing Phonon Data
 
@@ -506,9 +512,12 @@ Using this option, the user may send phonon data for verification without sendin
 
 After receiving the encrypted payload (and sender's identity public key), the recipient's connectivity interface forwards the data to its card. To consume the receipt, the card performs the following:
 
-1. Recreate ECDH secret, decrypt, and deserialize the payload.
-2. Derive the public key corresponding to the `owner` private key (in the phonon)
-3. Return phonon data: `ownerPubKey`, `networkDescriptor`, `assetId`, `txId`, `idx`, `amount`, and `decimals`
+1. Validate that the sender's certificate matches the sender's identity public key and that the certificate signer is recognized (i.e. is the same one that signed the card's own certificate).
+2. Recreate ECDH secret, decrypt, and deserialize the phonon payload.
+3. Derive the public key corresponding to the `owner` private key (in the phonon)
+4. Return phonon data: `ownerPubKey`, `networkDescriptor`, `assetId`, `txId`, `idx`, `amount`, and `decimals`
+
+> Each card should store one or more trusted certificate signer public keys. At a minimum, it should trust its own certificate signer, which is stored when the card is initialized.
 
 At this point, the recipient may verify that the phonon corresponds to the correct number/type of tokens which exist on the correct network. Once satisfied and ready to store the phonon the recipient calls `receiveTransfer` with the encrypted blob, which decrypts, deserializes, and stores all of the data (including the private key). At this point, the sender should receive the good or service and, ideally, an "ack" message from the receipient.
 
@@ -517,9 +526,3 @@ At this point, the recipient may verify that the phonon corresponds to the corre
 ### Storing Phonons Off-Card
 
 Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key** so that the phonon may be decrypted at a later time.
-
-### Checking Certificates
-
-Although not strictly part of the Phonon Network specification, it is encouraged that interfaces check the certification of counterparty cards. This gives the user confidence that he is transacting with a valid card (i.e. one that is *not* running malicious code).
-
-Any interface is free to implement which certificates to check (e.g. the GridPlus Lattice1 validates the existence of a GridPlus cert) - this could also be configurable for the user, who may trust certain card issuers and not others.
