@@ -1,10 +1,13 @@
 # Phonon Network Specification
 
-The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is designed to function on the Ethereum network, but will likely be extended to the Bitcoin network in future versions. Phonon can be thought of as a L2 scaling technique where transactions are completely validated only between participants of a direct transaction. Nothing is shared with users on the Phonon network outside of the participant set for a given transaction.
+The Phonon Network is a layer 2 scaling solution for public blockchain networks. It is primarily designed to function on the Ethereum network, but can also be used on Bitcoin and other UTXO-based chains. Phonon can be thought of as a L2 scaling technique where transactions are completely validated between participants of a direct transaction. Nothing is shared with users on the Phonon network outside of the participant set for a given transaction. This yields significant benefits to both scalability and privacy relative to large, highly decentralized blockchain networks.
 
-To achieve this design topology, Phonon uses **hardware enforced security** to prevent against double spend attacks, specifically via smart cards that leverage physical fingerprints for entropy, which cannot be extracted. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with SafeCards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
+To achieve this design topology, Phonon uses **hardware enforced security** to prevent double spend attacks, specifically via smart cards that cannot be re-programmed or copied. Although the Phonon Network is theoretically card-agnostic, it is designed to be used with SafeCards, which have a specific Java card applet (see [here](https://github.com/GridPlus/safe-card)).
 
-Physical fingerprints for entropy come in the form of Physically Uncloneable Functions, or PUFs. A PUF is a physical entity embodied in a physical structure. They are based on variations that occur during semiconductor manufacturing and essentially act as entropy stamped into a physical circuit. This entropy cannot be removed from the PUF, hence the uncloneable descriptor from its name.
+The security model of a Phonon-compatible smart card derives from:
+
+1. The card's identity, which is derived from its internal physically unclonable function (PUF). A PUF is a digital fingerprint derived from physical imperfections in the manufacturing process of a secure enclave chip.
+2. Certification of each card's identity by the card issuer. This comes in the form of an ECDSA signature of the card's identity public key by a known card issuer's signing key.
 
 ### What is a Phonon?
 
@@ -20,7 +23,7 @@ When a user wishes to withdraw a phonon onto the blockchain network from which i
 
 ### Where is the Trust?
 
-Although not strictly part of the Phonon Network, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is generally accomplished with a **certificate authority** (usually the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. Every user of the phonon network may configure which CAs they trust and may add or revoke trust of any given CA at any time.
+Although not strictly part of the Phonon Network, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is generally accomplished with a **certificate signer** (usually the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. When interacting with another card, this certificate (ECDSA signature) is presented as proof that the card was created and authenticated by a known card issuer.
 
 # Structure of a Phonon
 
@@ -49,30 +52,30 @@ public KeycardApplet(byte[] bArray, short bOffset, byte bLength) {
     ...setup...
     
     // Create and configure identity keypair
-    certsAuthPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, SECP256k1.SECP256K1_KEY_SIZE, false);
-    certsAuthPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, SECP256k1.SECP256K1_KEY_SIZE, false);
-    secp256k1.setCurveParameters(certsAuthPublic);
-    secp256k1.setCurveParameters(certsAuthPrivate);
+    idPublic = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, SECP256k1.SECP256K1_KEY_SIZE, false);
+    idPrivate = (ECPrivateKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, SECP256k1.SECP256K1_KEY_SIZE, false);
+    secp256k1.setCurveParameters(idPublic);
+    secp256k1.setCurveParameters(idPrivate);
 
     // Load the identity keypair with data
     byte[] privBuf = new byte[Crypto.KEY_SECRET_SIZE];
     crypto.random.generateData(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
-    certsAuthPrivate.setS(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
+    idPrivate.setS(privBuf, (short) 0, Crypto.KEY_SECRET_SIZE);
     byte[] pubBuf = new byte[Crypto.KEY_PUB_SIZE];
     secp256k1.derivePublicKey(privBuf, (short) 0, pubBuf, (short) 0);
-    certsAuthPublic.setW(pubBuf, (short) 0, Crypto.KEY_PUB_SIZE);
+    idPublic.setW(pubBuf, (short) 0, Crypto.KEY_PUB_SIZE);
 
     ...other stuff...
   }
 ```
 
-Here we generate an "identity" key pair, which is used to identify the card. `crypto.random.generateData` uses the card's PUF (entropy) to create a random private key, which fills in the key pair objects.
+Here we generate an "identity" key pair(`idPublic`/`idPrivate`), which is used to identify the card. `crypto.random.generateData` uses the card's PUF (entropy) to create a random private key, which fills in the key pair objects.
 
 At this point, the card is **initialized**. While other key pairs (related to holding crypto assets) may be added later, the only one needed for Phonon is the identity key, which cannot be changed once it is initialized.
 
 ## Proving Identity
 
-The card's identity is captured in `certsAuthPublic` above. Any user with a card reader may request this public key at any time after the card is initialized.
+The card's identity is captured in `idPublic` above. Any user with a card reader may request this public key at any time after the card is initialized.
 
 The card may "prove" its identity to any requester with a card reader using a challenge/response mechanism:
 
@@ -88,28 +91,26 @@ private void authenticate(APDU apdu) {
     
     // Add signature of msg hash
     Signature tmpSig = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
-    tmpSig.init(certsAuthPrivate, Signature.MODE_SIGN);
+    tmpSig.init(idPrivate, Signature.MODE_SIGN);
     tmpSig.signPreComputedHash(msgHash, (short) 0, MessageDigest.LENGTH_SHA_256, apduBuffer, sigOff);
    
     ...
   }
 ```
 
-Here the card receives a hash and signs it using its identity key (`certsAuthPrivate`), returning that signature as a response. Thus, the requester can verify that the public key yeilded from the card earlier corresponds to the private key which made this signature.
+Here the card receives a hash and signs it using its identity key (`idPrivate`), returning that signature as a response. Thus, the requester can verify that the public key yeilded from the card earlier corresponds to the private key which made this signature.
 
 ## Certifying a Card
 
-Each SafeCard is loaded with a certificate from the GridPlus certificate authority. This is nothing more than a signature on the card's identity public key (which the card has proven to have) by an ECDSA key pair controlled by GridPlus at the time of card issuance. Once loaded, the cert cannot be modified or removed.
+Each SafeCard is loaded with a certificate from the card issuer. This is nothing more than a signature on the card's identity public key (which the card has proven to have) by an ECDSA key pair controlled by the issuer at the time of card issuance. Once loaded, the cert cannot be modified or removed.
 
-The cert can be inspected at any time by any user with a card reader. It proves that GridPlus issued the card in question and is a prerequisite for most SafeCard-based interactions on the Lattice1.
-
-> GridPlus certificates are not *required* in the Phonon Network, but they *are* utilized in the data transport layer used by Lattice1 devices, which must first check the certification of a counterparty before creating a secure channel and accepting payment.
+The cert can be inspected at any time by any user with a card reader. It proves the identity of the card issuer and, in the case of GridPlus, is a prerequisite for most SafeCard-based interactions on the Lattice1 (many are independent to the Phonon Network).
 
 ### Trusted Certificate Signers
 
 When the certificate is loaded, its signer (whose public key is also included in the payload) is also verified to have signed the certificate. As long as this check passes, the certificate loading should succeed. The signer's public key is stored globally to validate interactions with other cards later on.
 
-> In the future, additional certificate signers may be added to SafeCards on the Phonon Network. These will need to be signed the by original certificate signer (GridPlus), as allowing arbitrary certificate signers to validate cards introduces many new attack vectors. However, it is GridPlus' intention to interoperate with other card issuers (e.g. Status) in the context of the Phonon Network should they be interested. 
+> Unfortunately, cards cannot interoperate with unknown certificate signers, as this would undermine the entire security model of the system. We are still researching how we might, in the future, interoperate with other card issuers should they wish to use the Phonon Network.
 
 # Accounting on the Card
 
@@ -120,22 +121,21 @@ Data is stored both on the public blockchain (see: *On-Chain Settlements*) and o
 Phonons are not deposited to the card's identity address, but rather to an address derived from the identity key:
 
 ```
-byte[] getDepositKey(long startingNonce, short n) {
-    byte[] toReturn = new byte[n * PRIVATE_KEY_LEN];
-    // Derive n private keys
-    for (short i = 0; i < n; i++) {
-      // Copy this key to the return buffer
-      Util.arrayCopyNonAtomic(toReturn, i*n, sha256(authPrivKey, startingNonce+n), PRIVATE_KEY_LEN);
-    }
+byte[] getDepositKey(long nonce) {
+    byte[] toReturn = new byte[PRIVATE_KEY_LEN];
+    // Hash idPrivate with provided nonce to get a new private key
+    Util.arrayCopyNonAtomic(toReturn, 0, sha256(idPrivate, nonce), PRIVATE_KEY_LEN);
     return toReturn;
 }
 ```
 
-Here we can generate `n` private keys, whose public keys (actually addresses) are needed for deposits on-chain.
+The derivation is simply `sha256(nonce, idPrivate)`.
 
 ### Nonce Tracking
 
-Each deposit key is the hash of a **nonce** with the identity key. A global nonce is kept on each card; every time a phonon is deposited, the global nonce is incremented. More on this later.
+Each deposit key is the hash of a **nonce** with the identity key. A global nonce is kept on each card; every time a phonon is deposited, the global nonce is incremented. More on this later. 
+
+> Note that depositing is not the same thing as generating a deposit address!
 
 ## Storing Phonons
 
@@ -143,13 +143,12 @@ Phonon storage is described on the card as:
 
 ```
 class Phonon {
-  public byte[32] owner;    // Private key that can spend or withdraw the phonon
-  public int assetId;       // ETH only: uint32 representing a type of ERC20 or NFT id
-  public long amount;       // uint64 representing the asset value
-  public short decimals;    // ETH only: (amount * 10^decimals) represents the value in atomic units
-  public byte[32] txId;     // Transaction hash (or, more generically, "id")
-  public byte idx;          // BTC only: Index of the UTXO in the transaction represented by `txId`
-  public short networkId;   // Index (on-card) on which to determine which network these tokens exist on
+  public byte[32] owner;     // Private key that can spend or withdraw the phonon
+  public byte assetId;       // Type of asset being transferred (e.g. ETH, BTC, ERC20 X)
+  public long amount;        // uint64 representing the asset value
+  public short decimals;     // ETH only: (amount * 10^decimals) represents the value in atomic units
+  public byte[33] extraData; // Data depending on the network
+  public byte networkId;     // Index (on-card) on which to determine which network these tokens exist on
 }
 
 private Phonon[] phonons;
@@ -159,9 +158,9 @@ private Phonon[] phonons;
 
 The private key associated with the deposit address of this phonon. This key is needed to withdraw (or spend) the phonon.
 
-#### `assetId` (ETH ONLY)
+#### `assetId`
 
-An index for the type of asset on the smart contract. This is specific to the on-chain smart contract in question (see: *On-Chain Settlements* section). An asset index must be unique on a combination of the address of the contract and an index of a specific token on that contract. It is assumed that a uint32 is large enough to capture all asset ids in a given contract.
+Internal identifier for the type of asset. This can be a network token such as BTC or ETH or a token such as an ERC20 or ERC721. This value does not need to be validated by a counterparty.
 
 #### `amount`
 
@@ -180,13 +179,12 @@ It is up to the depositor to encode these two parameters. So long as the recipie
 1. `amount = 612`, `decimals = 16`
 2. `amount = 6,120,000`, `decimals = 12`
 
-#### `txId`
+#### `extraData`
 
-The id (usually a hash) of the on-chain transaction in which this phonon was created. This is not strictly necessary for Ethereum, but is good practice to include.
+33 bytes of data used to describe the transaction or asset. 
 
-#### `idx` (BTC ONLY)
-
-Index of the Phonon UTXO (in Bitcoin, each Phonon is a UTXO) within the transaction specified in `txId`.
+* For Bitcoin, this is the transaction hash and a 1-byte `vout` (output) index of this UTXO within the transaction that created it.
+* For Ethereum, this contains an identifier hash (left-padded with one zero) indicating what bespoke token this is. Generally this pertains to non-fungible tokens (NFTs) such as ERC721s.
 
 #### `networkId`
 
@@ -224,22 +222,27 @@ void setNetworkReference(short id, byte[] reference) {
 }
 ```
 
+## Referencing Asset IDs
+
+The `assetId` parameter is for internal accounting of assets held by a card. Its value is entirely subjective and is only referenced by the user's interface to the card. If a user wishes for `assetId=0` to represent Ethereum and `assetId=1` to represent Bitcoin, that is equivalent to the reverse.
+
 ## Deposits
 
 A phonon can be added to the card with the following pseudocode:
 
 ```
-deposit(long recipientIndex, short assetId, byte[] amount, short networkId) {
+deposit(..params) {
 
-  // Check nonce
-  validateDeposit(receiptIndex);
+  // Check that the deposit address corresponds to a nonce that is lower
+  // than the current global nonce.
+  validateDeposit(nonce);
 
   // Derive the private key associated with the deposit address
   // using the same nonce index
-  byte[] priv = deriveIdPriv(recipientIndex);
+  byte[] priv = deriveIdPriv(nonce);
   
   // Instantiate the phonon and put it in the next available storage slot
-  Phonon p = new Phonon(priv, assetId, amount, networkId);
+  Phonon p = new Phonon(priv, assetId, amount, decimals, extraData, networkId);
   phonons[nextAvailableIndex] = p;
   
 }
@@ -249,7 +252,7 @@ This will re-derive the recipient private key using the index. Recall that this 
 
 The included data is packed into a `Phonon` and is stored at the first unused index.
 
-> Note that there is a maximum number of phonons which may be stored on a given card. If the card runs out of space, this API call will fail, but the user can store the phonon somewhere else and send it to the card at any time - of course this means the user must also persist the `recipientIndex`, which is not part of the phonon deposit metadata!
+> Note that there is a maximum number of phonons which may be stored on a given card. If the card runs out of space, this API call will fail, but the user can store the phonon somewhere else and send it to the card at any time - of course this means the user must also persist the `nonce`, which is not part of the phonon deposit metadata!
 
 ### Nonce Tracking
 
@@ -269,14 +272,14 @@ This mechanism prevents against replay attacks, whereby a user could deposit the
 
 ### Network Specificity and Verification
 
-On Ethereum, deposits will correspond to calls to a smart contract, which is responsible for managing balances, deposits, and withdrawals. On Bitcoin, deposits are simply transfers to the deposit address (i.e. they look like any other transaction on the network).
+On Ethereum, deposits will correspond to calls to a smart contract, which is responsible for managing balances, deposits, and withdrawals. On Bitcoin and other UTXO-based networks, deposits are simply transfers to the deposit address (i.e. they look like any other transaction on the network).
 
-You may have notices that no proofs are needed for deposits. This is because on the Phonon Network, it is the responsibility of the **recipient** to validate the following when receiving a phonon:
+You may have noticed that *no proofs are needed for deposits*. This is because on the Phonon Network, it is the responsibility of the **recipient** to validate the following when receiving a phonon:
 
-1. The asset and network are the same as the recipient is expecting.
-2. The value of the phonon is correct.
-3. The deposit has a sufficient amount of work (or, more generally, finality) behind it.
-4. (Technically optional, but important) The counterparty has a card that the recipient trusts.
+1. The counterparty has a card that the recipient trusts.
+2. The phonon has been deposited on the correct network and corresponds to the correct asset id.
+3. The value of the phonon is correct.
+4. The deposit has a sufficient amount of work (or, more generally, finality) behind it.
 
 If these conditions are satisfied, the recipient can send an "ack" message to the sender (covered later) indicating that he is satisfied with the payment.
 
@@ -304,7 +307,7 @@ This looks up the phonon based on a storage index, which simply indicates where 
 If the provided phonon corresponds to a non-null network descriptor (indicating it is an Ethereum-based network), this function will do the following:
 
 1. Assert that `data` is 20 bytes (it corresponds to the recipient address).
-2. Sign a message (`msg`) with the phonon's private key: `sha256(owner, networkDescriptor, assetId, amount, recipient)`. **Note that `amount` here is actually `amount * (10 ** decimals)`!**
+2. Sign a message (`msg`) with the phonon's private key: `sha256(owner, networkDescriptor, assetId, amount, recipient)`. **Note that `amount` here is actually `amount * (10 ** decimals)`!** Since the EVM has a 256-bit word size, each of these values is packed into a 32-byte buffer.
 3. Sign the same message with the card's identity private key.
 4. Remove the phonon at the provided index.
 
@@ -357,7 +360,7 @@ Once requesting a withdrawal signature, the interface must do a check such as th
 
 If the provided phonon corresponds to a null network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
 
-Bitcoin withdrawals must unencumber the coins by signing the transaction input, which is fully described by `txId` and `idx` in the phonon. The following data is then serialized and returned from the card. This data can be packaged into a transaction by the interface. It is therefore up to the interface to determine the network fee and the recipient!
+Bitcoin withdrawals must unencumber the coins by signing the transaction input, which is fully described by `extraData` in the phonon. The following data is then serialized and returned from the card. This data can be packaged into a transaction by the interface. It is therefore up to the interface to determine the network fee and the recipient!
 
 > **IMPORTANT NOTE:** *Unlike Ethereum, Bitcoin withdrawal data does **not** include the recipient! The recipient must be specified in the transaction output by the interface, making a secure interface like the [Lattice](https://gridplus.io/lattice) more important than it is for Ethereum.*
 
@@ -375,11 +378,12 @@ serWithdrawal = [
 ]
 ```
 
-**TODO: determine the ramifications of spending via segwit or not. [This document](https://bitcoincore.org/en/2016/01/26/segwit-benefits/) describes segwit spends as not needing to have knowledge of the full transactions. If legacy spends do require knowledge of the full transaction, we should probably only support segwit.**
+> Phonon relies on [segregated witness inputs](https://github.com/bitcoinbook/bitcoinbook/blob/develop/ch07.asciidoc#segregated-witness), which do not need to know state of other inputs in a transaction.
+
 
 # On-Chain Settlements
 
-Phonons may be deposited and withdrawn using a settlement smart contract on Ethereum. Network and asset IDs are also stored in a registry on a smart contract, which should function as a source of truth. (The network id should be fixed for a given network).
+Phonons may be deposited and withdrawn using a settlement smart contract on Ethereum. For Bitcoin, withdrawals do not require a settlement contract - they are simple spends by the deposit keys.
 
 ## Ethereum-based Networks
 
@@ -404,9 +408,9 @@ mapping(address => Phonon) public phonons;
 mapping(uint256 => Asset) public assets;
 ```
 
-Here `assets` are indexed on `assetId`, which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `Phonons` are indexed on a recipient address and contain an `Asset` and an amount.
+Here `assets` are indexed on an asset index (not the same as the one in the phonon packet held by the card), which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `Phonons` are indexed on a recipient address and contain an `Asset` and an amount.
 
-> Assets are generally created and stored on a registry, which can be the same settlement contract. Depending on the design, the contract deployer may wish to restrict access to registry management or open it up to users so that they can add their own tokens (especially useful for NFTs).
+> Asset indices are generally stored on a registry, which can be the same settlement contract. Depending on the design, the contract deployer may wish to restrict access to registry management or open it up to users so that they can add their own tokens (especially useful for NFTs).
 
 ### Deposits
 
@@ -414,9 +418,9 @@ Once a user generates one or more deposit addresses from his card, he may send a
 
 In order to deposit one or more tokens to `recipient`, the following logic is performed:
 
-1. Look up the asset using `assetId`. If this maps to an empty asset, the transaction will fail.
+1. Look up the asset using an index (`assets[index]`). If this maps to an empty asset, the transaction will fail.
 2. Look up the balance of the recipient using: `phonons[recipient]`. If this balance is >0, the transaction will fail.
-3. Move asset from the sender's account. Depending on the asset type (ERC20 or ERC721), this will call a different method of the underlying contract.
+3. Transfer asset from the sender's account to `recipient`. Depending on the asset type (ERC20 or ERC721), this will call a different method of the underlying contract.
 
 This produces a transaction on the Ethereum network, the contents of which may be sent to the user's card for deposit.
 
@@ -462,17 +466,11 @@ serPhonon = [
   TLV_PRIVATE_KEY, 
   PRIVATE_KEY_LEN,         // 32
   owner,
-  TLV_ASSET_ID,
-  ASSET_ID_LEN,            // 2
-  assetId,
-  TLV_TX_ID,
-  TX_ID_LEN,               // 32
+  TLV_PHONON_EXTRA_DATA,
+  PHONON_EXTRA_DATA_LEN,   // 33
   txId,
-  TLV_UTXO_IDX,
-  UTXO_IDX_LEN,            // 1
-  idx,
   TLV_PHONON_AMOUNT,
-  PHONON_AMOUNT_LEN,       // 4
+  PHONON_AMOUNT_LEN,       // 8
   amount,
   TLV_PHONON_DECIMALS,
   PHONON_DECIMALS_LEN,     // 2
@@ -506,7 +504,7 @@ bytes[] sendPhonon(short phononIdx, bool withPriv) {
 }
 ```
 
-Using this option, the user may send phonon data for verification without sending the phonon itself.
+Using this option, the user may send phonon data for verification by the counterparty without sending the phonon itself.
 
 ## Receiving Payment
 
@@ -514,15 +512,15 @@ After receiving the encrypted payload (and sender's identity public key), the re
 
 1. Validate that the sender's certificate matches the sender's identity public key and that the certificate signer is recognized (i.e. is the same one that signed the card's own certificate).
 2. Recreate ECDH secret, decrypt, and deserialize the phonon payload.
-3. Derive the public key corresponding to the `owner` private key (in the phonon)
-4. Return phonon data: `ownerPubKey`, `networkDescriptor`, `assetId`, `txId`, `idx`, `amount`, and `decimals`
-
-> Each card should store one or more trusted certificate signer public keys. At a minimum, it should trust its own certificate signer, which is stored when the card is initialized.
-
-At this point, the recipient may verify that the phonon corresponds to the correct number/type of tokens which exist on the correct network. Once satisfied and ready to store the phonon the recipient calls `receiveTransfer` with the encrypted blob, which decrypts, deserializes, and stores all of the data (including the private key). At this point, the sender should receive the good or service and, ideally, an "ack" message from the receipient.
+3. Derive the public key corresponding to the `owner` private key (in the phonon).
+4. Save the phonon to internal storage.
 
 > **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
 
+### Static Validation
+
+There is also an option to validate the data of a phonon without "receiving" it. This is coupled with the static validation checks discussed in the previous section (i.e. the phonon contains the public key rather than the private key). This option does *not* store the phonon - it simply parses it and returns public data so the potential recipient may check it on chain. Note that this will still fail if the sender does not have a certificate from the trusted signer.
+
 ### Storing Phonons Off-Card
 
-Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key** so that the phonon may be decrypted at a later time.
+Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key and certificate** so that the phonon may be decrypted and validated at a later time.
