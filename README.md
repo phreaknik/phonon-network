@@ -454,6 +454,75 @@ Phonons are sent across the Phonon Network using encrypted communication channel
 
 In order for cards on the Phonon Network to communicate, they must form encrypted communication channels using their identity keypairs. Shared secrets are derived via ECDH and are used for symmetric AES encryption.
 
+### Using a Receipt Salt
+
+Alls messages are encrypted end-to-end using a shared secret derived from the two cards' identity keys. However, transfers require a second level of encryption using the recipient's `receiptSalt`, a temporary random number used to prevent replay attacks. The `receiptSalt` API is captured in the following pseudocode:
+
+```
+int[5] receiptSalt;
+int[5] receiptSaltTs;
+
+// Return all receipt salts concatenated with corresponding timestamps
+int[10] getReceiptSalts() {
+ return receiptSalt + receiptSaltTs;
+}
+
+// Clear a given receipt salt at the specified index
+void resetReceiptSaltByIndex(byte i) {
+  receiptSalt[i] = null;
+  receiptSaltTs[i] = null;
+}
+
+// Get a new receipt salt at the specified index
+int[2] genReceiptSaltAtIndex(byte i, int ts) {
+  // Throw an error if this slot is currently in use
+  if (receiptSalt[i] != null || receiptSaltTs[i] != null) {
+    throw error;
+  } else {
+    // Generate a random int (4 byte number)
+    receiptSalt[i] = crypto.random(4);
+    // Set the corresponding timestamp to whatever was passed
+    receiptSaltTs[i] = ts;
+  }
+}
+
+// Get a public key 
+byte[32] getSaltedPubKey(byte i) {
+  ECPrivateKey tmpPrivate = sha256(receiptSalt[i], idPrivate);
+  ECPublicKey tmpPublic = secp256k1.derivePublicKey(tmpPrivate);
+  return tmpPublic.bytes();
+}
+    
+
+void receivePhonons(byte i, []byte payload) {
+  // 1. Derive salted private key
+  // 2. Generate shared secret between counterparty's public key and salted private key
+  // 3. Decrypt phonon data
+  // 4. Delete receiptSalt[i]
+  // 5. Save phonon(s)
+}
+```
+
+Note that the corresponding timestamps (`receiptSaltTs`) are not used or referenced in the SafeCard codebase - they are meant to be used by outside interfaces that may want to enforce rules related to timeouts.
+
+### Exchanging a Phonon with Receipt Salts
+
+Once the normal communication channel (which uses a shared secret derived from the two identity keys) is established, the sender sends a message to the recipient indicating he is ready to send one or more phonons. The recipient's interface performs the necessary logic to ensure there is a new `receiptSalt` that the sender can use to encrypt the phonon packet.
+
+> It is **very** important that the recipient generates a **new** `receiptSalt` and does not re-use an existing one. When a phonon packet is received that utilizes a `receiptSalt`, that `receiptSalt` is deleted!
+
+The following mechanism generally outlines how the phonon salting and encrypting mechanism works:
+
+1. Alice calls `genReceiptSaltAtIndex()`, at an empty index and receives the salt.
+2. Alice's card generates the following private key: `sha256(receiptSalt, idPrivate)` and then its public key, which is returned and sent to Bob (along with the salt index)
+3. Bob's card derives an ECDH secret using his `idPrivate` and the public key Alice sent in step 2
+4. Bob's card encrypts the phonon using the secret from step 3 and sends it to Alice (along with the salt index, which is in plain text)
+5. Alice calls `receivePhonons()` with the encrypted blob and `receiptSalt` index from step 4.
+6. Alice's card re-derives the salted private key from step 2 using the `receiptSalt` index and decrypts phonon packet
+7. Alice's card deletes the relevant `receiptSalt` and stores the phonon(s)
+
+> We use "phonon packet" to describe an encrypted blob which contains one or more serialized phonons.
+
 ## Sending
 
 To send a phonon, a card must first serialize its data:
@@ -485,7 +554,21 @@ In this serialization scheme, each parameters is prefixed by:
 
 > The [TLV encoding](https://docs.oracle.com/javacard/3.0.5/api/javacardx/framework/tlv/BERTLV.html) pattern is used mostly because it is an artifact of Java card libraries.
 
-Once serialized, the phonon is deleted from its index in the global `phonons` variable. The serialized payload is encrypted via AES using the shared ECDH secret between the sender and receiver. Once the encrypted payload is returned by the card, the sender's communication interface sends this payload to the recipient's interface along with the sender's card's identity public key and matching certificate.
+**Once serialized, the phonon is deleted from its index in the global `phonons` variable.** The phonon is then encrypted using the salted AES secret described in the previous section. As noted above, the process of sending a phonon can be expanded to sending multiple phonons, where each is serialized in the same way. The end result is the following:
+
+```
+phononPacket = [
+  TLV_PHONON_PACKET,
+  numPhonons,
+  TLV_PHONON,
+  serPhonon1,
+  TLV_PHONON,
+  serPhonon2,
+  ...
+]
+```
+
+> **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
 
 ### Viewing Phonon Data
 
@@ -506,21 +589,20 @@ bytes[] sendPhonon(short phononIdx, bool withPriv) {
 
 Using this option, the user may send phonon data for verification by the counterparty without sending the phonon itself.
 
+> Sending static phonon data does **not** require a salted shared secret - it is only encrypted once, using the normal secure channel built from identity keys.
+
 ## Receiving Payment
 
 After receiving the encrypted payload (and sender's identity public key), the recipient's connectivity interface forwards the data to its card. To consume the receipt, the card performs the following:
 
 1. Validate that the sender's certificate matches the sender's identity public key and that the certificate signer is recognized (i.e. is the same one that signed the card's own certificate).
-2. Recreate ECDH secret, decrypt, and deserialize the phonon payload.
-3. Derive the public key corresponding to the `owner` private key (in the phonon).
+2. Recreate standard ECDH secret, decrypt, and deserialize the payload.
+3. Recreate inner, salted secret. Decrypt and deserialize the payload.
 4. Save the phonon to internal storage.
 
-> **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
+### Checking Before Saving
 
-### Static Validation
+To avoid a situation where the sender first dispatched valid static phonon data but then send a bad phonon, there are two options for receiving a phonon packet for payment:
 
-There is also an option to validate the data of a phonon without "receiving" it. This is coupled with the static validation checks discussed in the previous section (i.e. the phonon contains the public key rather than the private key). This option does *not* store the phonon - it simply parses it and returns public data so the potential recipient may check it on chain. Note that this will still fail if the sender does not have a certificate from the trusted signer.
-
-### Storing Phonons Off-Card
-
-Since the phonon data (sans private key) can be inspected without storing the phonon, the recipient may wish to save the phonon data somewhere else. This may be especially useful for a merchant who may be storing too many phonons for his card to handle. If storing the phonon in a different place, it is important that the recipient also store the **counterparty's identity public key and certificate** so that the phonon may be decrypted and validated at a later time.
+1. Call `dryRunReceivePhonon()`, which does all of the steps above, but does **not** save the phonon to storage. This function returns the public key associated with the phonon as well as the static phonon data. The recipient can use this data to look up the phonon on the chain before committing receipt of it.
+2. Once the receipient is satisfied with the contents of the phonon, he can call `receivePhonon()` with the phonon packet, which *does* commit the phonon to storage.
