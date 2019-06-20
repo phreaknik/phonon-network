@@ -166,7 +166,7 @@ Internal identifier for the type of asset. This can be a network token such as B
 
 The amount to transact. For Bitcoin, this uint64 represents the total number of satoshis (the atomic unit). For Ethereum, this may not be enough to describe the atomic units and must be combined with `decimals`.
 
-#### `decmials` (ETH ONLY)
+#### `decimals` (ETH ONLY)
 
 If the coin has >8 decimals, it must utilize this field in the following way:
 
