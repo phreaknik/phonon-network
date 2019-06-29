@@ -21,6 +21,8 @@ Each phonon contains an amount, an asset type, a private key, and some other met
 
 When a user wishes to withdraw a phonon onto the blockchain network from which it originated, they call a function on the card, which generates the relevant payload and makes a signature needed to satisfy the withdrawal conditions (these vary depending on the network and/or withdrawal implementation). *The signature originates from the **private key contained in the phonon itself** - once the withdrawal occurs, the phonon (including this key) is deleted from the card.* At this point, it is up to the user to package this signature into a transaction and make the withdrawal on-chain.
 
+> Note that the data being signed is passed to the card. In the case of Ethereum, this is a proof that would be sent to a smart contract. For Bitcoin and similar chains, it would be the script needed to unlock the coins on-chain.
+
 ### Where is the Trust?
 
 Although not strictly part of the Phonon Network, it is important for participants to trust the issuance of their counterparty (i.e. that the counterparty's card is indeed running Phonon and will not double spend). This is generally accomplished with a **certificate signer** (usually the card issuer), who signs the identity public key of the card in the manufacturing provisioning process. When interacting with another card, this certificate (ECDSA signature) is presented as proof that the card was created and authenticated by a known card issuer.
@@ -145,8 +147,8 @@ Phonon storage is described on the card as:
 class Phonon {
   public byte[32] owner;     // Private key that can spend or withdraw the phonon
   public byte assetId;       // Type of asset being transferred (e.g. ETH, BTC, ERC20 X)
-  public long amount;        // uint64 representing the asset value
-  public short decimals;     // ETH only: (amount * 10^decimals) represents the value in atomic units
+  public short amount;       // uint16 representing the asset value
+  public byte decimals;      // ETH only: (amount * 10^decimals) represents the value in atomic units
   public byte[33] extraData; // Data depending on the network
   public byte networkId;     // Index (on-card) on which to determine which network these tokens exist on
 }
@@ -164,7 +166,10 @@ Internal identifier for the type of asset. This can be a network token such as B
 
 #### `amount`
 
-The amount to transact. For Bitcoin, this uint64 represents the total number of satoshis (the atomic unit). For Ethereum, this may not be enough to describe the atomic units and must be combined with `decimals`.
+The amount to transact. For Bitcoin, this uint16 represents the total number of satoshis (the atomic unit). For Ethereum, this may not be enough to describe the atomic units and must be combined with `decimals`.
+
+> A 2-byte value is used for two reasons. First, it allows storage of more phonons on each card. Second, it forces more "human" denominations, such as 1, 5, 10, etc. As with fiat bills, the presence of more standardized denominations is generally favorable for exchange, simplicity, and also privacy.
+
 
 #### `decimals` (ETH ONLY)
 
@@ -185,6 +190,8 @@ It is up to the depositor to encode these two parameters. So long as the recipie
 
 * For Bitcoin, this is the transaction hash and a 1-byte `vout` (output) index of this UTXO within the transaction that created it.
 * For Ethereum, this contains an identifier hash (left-padded with one zero) indicating what bespoke token this is. Generally this pertains to non-fungible tokens (NFTs) such as ERC721s.
+
+> `extraData` may be left blank in some cases, but it is generally preferred so that recipients can more easily verify the authenticity of a phonon.
 
 #### `networkId`
 
@@ -226,6 +233,8 @@ void setNetworkReference(short id, byte[] reference) {
 
 The `assetId` parameter is for internal accounting of assets held by a card. Its value is entirely subjective and is only referenced by the user's interface to the card. If a user wishes for `assetId=0` to represent Ethereum and `assetId=1` to represent Bitcoin, that is equivalent to the reverse.
 
+When combined with the network references specified above, a user can easily determine which network this phonon pertains to. A typical transfer might be prefaced by the sender providing the relevant network reference in addition to the static phonon (i.e. not containing the private key). However, the exact proof mechanism is left up to the implementor.
+
 ## Deposits
 
 A phonon can be added to the card with the following pseudocode:
@@ -233,7 +242,7 @@ A phonon can be added to the card with the following pseudocode:
 ```
 deposit(..params) {
 
-  // Check that the deposit address corresponds to a nonce that is lower
+  // Check that the deposit address corresponds to a nonce that is higher
   // than the current global nonce.
   validateDeposit(nonce);
 
@@ -256,7 +265,7 @@ The included data is packed into a `Phonon` and is stored at the first unused in
 
 ### Nonce Tracking
 
-Recall the presence of `globalNonce` to track the last deposit address index that was used. Any deposit **must** be based on a nonce **greater than or equal to** the global nonce at that time:
+Recall the presence of `globalNonce` to track the last deposit address index that was used. Any deposit **must** be based on a nonce **greater than** the global nonce at that time:
 
 ```
 validateDeposit(long n) {
@@ -268,7 +277,7 @@ validateDeposit(long n) {
 }
 ```
 
-This mechanism prevents against replay attacks, whereby a user could deposit the same phonon multiple times - including after sending it. However, the user's software should be careful to issue deposits **in order** of the corresponding deposit address index.
+This mechanism prevents against replay attacks, whereby a user could deposit the same phonon multiple times - including after sending it. However, the user's software should be careful to issue deposits **in order** of the corresponding deposit address index (or else the `n <= globalNonce` condition will not be satisfied and the deposit will be void).
 
 ### Network Specificity and Verification
 
@@ -276,7 +285,7 @@ On Ethereum, deposits will correspond to calls to a smart contract, which is res
 
 You may have noticed that *no proofs are needed for deposits*. This is because on the Phonon Network, it is the responsibility of the **recipient** to validate the following when receiving a phonon:
 
-1. The counterparty has a card that the recipient trusts.
+1. The counterparty has a card that the recipient trusts (based on its certificate, which must be signed by the same card issuer).
 2. The phonon has been deposited on the correct network and corresponds to the correct asset id.
 3. The value of the phonon is correct.
 4. The deposit has a sufficient amount of work (or, more generally, finality) behind it.
@@ -290,49 +299,29 @@ The card may withdraw a phonon at any time by passing the phonon index and calli
 ```
 byte[] withdraw(short phononIndex, byte[] data) {
   Phonon p = phonons[phononIndex];  
+  // Make sure there is a valid phonon at the specified index
   if (p == null) {
     throw new Error();
-  } else {
-    return doWithdrawal(p, data);  // Depends on type of network
   }
+  // Sign whatever needs to be signed with the phonon's private key
+  byte[] sig = p.sign(data);
+  // Delete the phonon and return the signed data
+  phonons[phononIndex] = null;
+  return sig;
 }
 ```
 
 This looks up the phonon based on a storage index, which simply indicates where in the card's memory this data is being stored. If no phonon exists at that index, this call will fail.
 
-`data` contains withdrawal parameters, which is the receiving address for Ethereum and is empty for Bitcoin (because the address is specified by the withdrawing party's transaction building software - not the card).
+`data` contains withdrawal parameters, which is the receiving address for Ethereum and is a script for Bitcoin. Other blockchain networks (or layer two protocols) may also potentially use Phonon by requesting different signature data for withdrawal.
 
 ### Ethereum-based Withdrawals
 
-If the provided phonon corresponds to a non-null network descriptor (indicating it is an Ethereum-based network), this function will do the following:
+For Ethereum, the data to be signed depends on the smart contract. For the simplest case, a user would withdraw based on a receiving address. Once this address was signed by the phonon (which then self-destructed), it could be presented to a smart contract by another Ethereum account. This would trigger the contract to transfer the phonon coins based on the signer's address (i.e. the phonon's address) and then delete the record.
 
-1. Assert that `data` is 20 bytes (it corresponds to the recipient address).
-2. Sign a message (`msg`) with the phonon's private key: `sha256(owner, networkDescriptor, assetId, amount, recipient)`. **Note that `amount` here is actually `amount * (10 ** decimals)`!** Since the EVM has a 256-bit word size, each of these values is packed into a 32-byte buffer.
-3. Sign the same message with the card's identity private key.
-4. Remove the phonon at the provided index.
+> Other, more complex designs could also be used if the withdrawal mechanism required it. Again, the phonon simply signs whatever data is presented.
 
-The following serialized payload is expected from a withdrawal:
-
-```
-serWithdrawal = [ 
-  TLV_NETWORK_DESCRIPTOR,
-  NETWORK_DESCRIPTOR_LEN,   // 20
-  networkDescriptor,
-  TLV_ETH_ADDR,
-  ETH_ADDR_LEN,             // 20
-  recipient,                // The address to which the withdrawn coins will transfer
-  TLV_MSG_HASH, 
-  MSG_HASH_LEN,             // 32
-  msg,
-  TLV_SIGNATURE,
-  SIGNATURE_LEN,            // 64
-  ownerSig                  // signature (r,s) from `owner` private key on `msg`
-]
-```
-
-This is all the data needed to withdraw a phonon via a smart contract, which can do the following to verify the withdrawal (see: Ethereum-based Networks section for more details).
-
-#### Signature Recovery Parameter
+#### Aside: Ethereum Signature Recovery Parameter
 
 Ethereum smart contracts do not have the ability to *verify* a signature relative to a public key, but they are able to *recover* a signer based on a signature and message. They do this using a [recovery parameter](https://ethereum.stackexchange.com/questions/57478/generate-v-parameter-in-ethereum-transaction). This is a single bit (value 0 or 1), represented by `v`, which is usually thrown away when a signature is serialized (e.g. using DER format).
 
@@ -358,97 +347,13 @@ Once requesting a withdrawal signature, the interface must do a check such as th
 
 ### Bitcoin Withdrawals
 
-If the provided phonon corresponds to a null network descriptor, we need to create a Bitcoin transaction to withdraw, as there is no smart contract to manage balances on-chain and this balance is simply encumbered by a type of pay to script hash corresponding to the key held in the phonon.
-
-Bitcoin withdrawals must unencumber the coins by signing the transaction input, which is fully described by `extraData` in the phonon. The following data is then serialized and returned from the card. This data can be packaged into a transaction by the interface. It is therefore up to the interface to determine the network fee and the recipient!
+Bitcoin withdrawals must unencumber the coins by signing the transaction input. The simplest design would likely rely on [segregated witness inputs](https://github.com/bitcoinbook/bitcoinbook/blob/develop/ch07.asciidoc#segregated-witness), which do not need to know state of other inputs in a transaction.
 
 > **IMPORTANT NOTE:** *Unlike Ethereum, Bitcoin withdrawal data does **not** include the recipient! The recipient must be specified in the transaction output by the interface, making a secure interface like the [Lattice](https://gridplus.io/lattice) more important than it is for Ethereum.*
 
-```
-serWithdrawal = [
-  TLV_TX_ID,
-  TX_ID_LEN,           // 32
-  txId,
-  TLV_UTXO_IDX,
-  UTXO_IDX_LEN,        // 1
-  idx,
-  TLV_SIGNATURE,
-  SIGNATURE_LEN,
-  signedInput
-]
-```
-
-> Phonon relies on [segregated witness inputs](https://github.com/bitcoinbook/bitcoinbook/blob/develop/ch07.asciidoc#segregated-witness), which do not need to know state of other inputs in a transaction.
-
-
-# On-Chain Settlements
-
-Phonons may be deposited and withdrawn using a settlement smart contract on Ethereum. For Bitcoin, withdrawals do not require a settlement contract - they are simple spends by the deposit keys.
-
-## Ethereum-based Networks
-
-Ethereum (and Ethereum-derived networks) use smart contracts to manage deposits and withdrawals. Each deposit is mapped to a recipient, asset, and amount. Withdrawing requires a signature on key data, which can be used to prove validity of the withdrawal.
-
-### Data Structures
-
-Data is stored in the following way on the settlement smart contract:
-
-```
-struct Asset {
-  address contract;
-  uint256 id;         // Identifier for ERC721s
-}
-
-struct Phonon {
-  uint256 assetId;
-  uint256 amount;
-}
-
-mapping(address => Phonon) public phonons;
-mapping(uint256 => Asset) public assets;
-```
-
-Here `assets` are indexed on an asset index (not the same as the one in the phonon packet held by the card), which maps to both a contract containing the asset code and an optional identifier for a non-fungible asset within that contract. `Phonons` are indexed on a recipient address and contain an `Asset` and an amount.
-
-> Asset indices are generally stored on a registry, which can be the same settlement contract. Depending on the design, the contract deployer may wish to restrict access to registry management or open it up to users so that they can add their own tokens (especially useful for NFTs).
-
-### Deposits
-
-Once a user generates one or more deposit addresses from his card, he may send a number of tokens to the contract for deposit. Once the deposit occurs, the user may send a message to his card specifying the parameters used to make the deposit.
-
-In order to deposit one or more tokens to `recipient`, the following logic is performed:
-
-1. Look up the asset using an index (`assets[index]`). If this maps to an empty asset, the transaction will fail.
-2. Look up the balance of the recipient using: `phonons[recipient]`. If this balance is >0, the transaction will fail.
-3. Transfer asset from the sender's account to `recipient`. Depending on the asset type (ERC20 or ERC721), this will call a different method of the underlying contract.
-
-This produces a transaction on the Ethereum network, the contents of which may be sent to the user's card for deposit.
-
-### Withdrawals
-
-The following data is necessary to withdraw a phonon on an Ethereum-based network:
-
-1. `networkDescriptor` - tells the user which network and which contract to withdraw from
-2. `recipient` - the receiving address for this withdrawal
-3. Message hash (`sha256(owner, networkDescriptor, assetId, amount, recipient)`)
-4. Signature of message hash by `owner`
-
-With this data, the contract can do the following:
-
-1. Use `ecrecover` and *(2)* to get the `owner` public key (and address) from *(3)*
-2. Find the `Phonon` object associated to the `owner` address recovered above.
-3. Use `recipient` and data from steps 1 and 2 to construct the following hash: `sha256(owner, address(this), assetId, amount, recipient)`. This value should match *(3)*.
-4. Delete phonon from contract storage and transfer coins to `recipient`.
-
-> Note that the `networkDescriptor` is the settlement contract address, which is validated in step 2 above because smart contracts can identify themselves via `address(this)`.
-
-## Bitcoin Network
-
-As covered in previous sections, no Phonon-based logic happens on the Bitcoin network. Deposits and withdrawals function as normal Bitcoin transactions.
-
 # Transacting on the Phonon Network
 
-Phonons are sent across the Phonon Network using encrypted communication channels that connect any two cards. Because transfers are validated between only two participants, there is no concept of blocks or block times and "consensus" is a single "ack" message.
+Phonons are sent across the Phonon Network using encrypted communication channels that connect any two cards. Because transfers are validated between only two participants, there is no concept of blocks or block times. Because phonon transfers are atomic, "consensus" is generally achieved out-of-band. 
 
 ## Connections
 
@@ -456,56 +361,11 @@ In order for cards on the Phonon Network to communicate, they must form encrypte
 
 ### Using a Receipt Salt
 
-Alls messages are encrypted end-to-end using a shared secret derived from the two cards' identity keys. However, transfers require a second level of encryption using the recipient's `receiptSalt`, a temporary random number used to prevent replay attacks. The `receiptSalt` API is captured in the following pseudocode:
+All messages are encrypted end-to-end using a shared secret derived from the two cards' identity keys. However, transfers require a *second* layer of encryption using the recipient's `receiptSalt`, a temporary random number used to prevent replay attacks.
 
-```
-int[5] receiptSalt;
-int[5] receiptSaltTs;
+Generally, a card should come with a fixed number of receipt salts and may want to associate them with timestamps in case their corresponding transfers are never sent.
 
-// Return all receipt salts concatenated with corresponding timestamps
-int[10] getReceiptSalts() {
- return receiptSalt + receiptSaltTs;
-}
-
-// Clear a given receipt salt at the specified index
-void resetReceiptSaltByIndex(byte i) {
-  receiptSalt[i] = null;
-  receiptSaltTs[i] = null;
-}
-
-// Get a new receipt salt at the specified index
-int[2] genReceiptSaltAtIndex(byte i, int ts) {
-  // Throw an error if this slot is currently in use
-  if (receiptSalt[i] != null || receiptSaltTs[i] != null) {
-    throw error;
-  } else {
-    // Generate a random int (4 byte number)
-    receiptSalt[i] = crypto.random(4);
-    // Set the corresponding timestamp to whatever was passed
-    receiptSaltTs[i] = ts;
-  }
-}
-
-// Get a public key 
-byte[32] getSaltedPubKey(byte i) {
-  ECPrivateKey tmpPrivate = sha256(receiptSalt[i], idPrivate);
-  ECPublicKey tmpPublic = secp256k1.derivePublicKey(tmpPrivate);
-  return tmpPublic.bytes();
-}
-    
-
-void receivePhonons(byte i, []byte payload) {
-  // 1. Derive salted private key
-  // 2. Generate shared secret between counterparty's public key and salted private key
-  // 3. Decrypt phonon data
-  // 4. Delete receiptSalt[i]
-  // 5. Save phonon(s)
-}
-```
-
-Note that the corresponding timestamps (`receiptSaltTs`) are not used or referenced in the SafeCard codebase - they are meant to be used by outside interfaces that may want to enforce rules related to timeouts.
-
-### Exchanging a Phonon with Receipt Salts
+### Sending a Phonon
 
 Once the normal communication channel (which uses a shared secret derived from the two identity keys) is established, the sender sends a message to the recipient indicating he is ready to send one or more phonons. The recipient's interface performs the necessary logic to ensure there is a new `receiptSalt` that the sender can use to encrypt the phonon packet.
 
@@ -513,96 +373,41 @@ Once the normal communication channel (which uses a shared secret derived from t
 
 The following mechanism generally outlines how the phonon salting and encrypting mechanism works:
 
-1. Alice calls `genReceiptSaltAtIndex()`, at an empty index and receives the salt.
+0. Bob is going to transfer a phonon to Alice.
+1. Alice calls `genReceiptSaltAtIndex()`, at an empty index to create a new salt.
 2. Alice's card generates the following private key: `sha256(receiptSalt, idPrivate)` and then its public key, which is returned and sent to Bob (along with the salt index)
-3. Bob's card derives an ECDH secret using his `idPrivate` and the public key Alice sent in step 2
-4. Bob's card encrypts the phonon using the secret from step 3 and sends it to Alice (along with the salt index, which is in plain text)
-5. Alice calls `receivePhonons()` with the encrypted blob and `receiptSalt` index from step 4.
-6. Alice's card re-derives the salted private key from step 2 using the `receiptSalt` index and decrypts phonon packet
-7. Alice's card deletes the relevant `receiptSalt` and stores the phonon(s)
+3. Bob's card generates a random key pair (`randPriv` and `randPub`) and combines `randPub` with Alice's salt-based public key from step 2 to generate a shared secret (`sec`) using ECDH.
+4. Bob's card serializes and encrypts the phonon (`encPhonon`) using `sec` from step 3 and then deletes the phonon object from storage.
+5. Bob sends the payload `[randomPub][encPhonon]` to Alice.
+5. Alice's card re-creates `sec` with Bob's `randPub` and her salted private key, which must be re-derived. `sec` is used to AES-decrypt the phonon payload.
+6. Alice's card deletes the relevant `receiptSalt` and stores the phonon.
 
-> We use "phonon packet" to describe an encrypted blob which contains one or more serialized phonons.
+### Viewing Static Phonon Data
 
-## Sending
+Because the phonon is *deleted* when the transfer is initiated, the sender could find himself in a situation where the recipient doesn't agree to the value or network of the phonon and the sender would lose that phonon forever!
 
-To send a phonon, a card must first serialize its data:
-
-```
-serPhonon = [ 
-  TLV_NETWORK_DESCRIPTOR,
-  NETWORK_DESCRIPTOR_LEN,  // 32 bytes
-  networkDescriptor,
-  TLV_PRIVATE_KEY, 
-  PRIVATE_KEY_LEN,         // 32
-  owner,
-  TLV_PHONON_EXTRA_DATA,
-  PHONON_EXTRA_DATA_LEN,   // 33
-  txId,
-  TLV_PHONON_AMOUNT,
-  PHONON_AMOUNT_LEN,       // 8
-  amount,
-  TLV_PHONON_DECIMALS,
-  PHONON_DECIMALS_LEN,     // 2
-  decimals
-]
-```
-
-In this serialization scheme, each parameters is prefixed by:
-
-1. A data type identifier (1-byte TLV)
-2. A 1-byte length prefix indicating the number of bytes to follow for that parameter
-
-> The [TLV encoding](https://docs.oracle.com/javacard/3.0.5/api/javacardx/framework/tlv/BERTLV.html) pattern is used mostly because it is an artifact of Java card libraries.
-
-**Once serialized, the phonon is deleted from its index in the global `phonons` variable.** The phonon is then encrypted using the salted AES secret described in the previous section. As noted above, the process of sending a phonon can be expanded to sending multiple phonons, where each is serialized in the same way. The end result is the following:
-
-```
-phononPacket = [
-  TLV_PHONON_PACKET,
-  numPhonons,
-  TLV_PHONON,
-  serPhonon1,
-  TLV_PHONON,
-  serPhonon2,
-  ...
-]
-```
-
-> **NOTE:** This scheme *is* susceptible to malicious behavior. A recipient could claim to never receive the payment and not credit the sender. Like physical cash, once it leaves the sender, it cannot be taken back. Therefore it is recommended that Phonon Network transactions be relatively small in value.
-
-### Viewing Phonon Data
-
-Because the phonon is *deleted* when the transfer is initiated, the sender could find himself in a situation where the recipient doesn't agree to the value of the phonon and the sender would lose that phonon forever!
-
-To avoid this situation, the card may also serialize the above data **without the private key** (and with the *public key* instead):
-
-```
-bytes[] sendPhonon(short phononIdx, bool withPriv) {
-  if (withPriv == false) {
-    return serialize(phononIdx, false);  // Get data with public key
-  } else {
-    bytes[] retData = serialize(phononIdx, true);  // Get data with private key
-    phonons[phononIdx] = null;    // Delete the phonon
-    return resData;
-}
-```
-
-Using this option, the user may send phonon data for verification by the counterparty without sending the phonon itself.
+To avoid this situation, the card may also serialize the above data **without the private key** (and with the *public key* instead). Using this option, the user may send phonon data for verification by the counterparty without sending the phonon itself.
 
 > Sending static phonon data does **not** require a salted shared secret - it is only encrypted once, using the normal secure channel built from identity keys.
 
-## Receiving Payment
+### A Few Notes on Human Errors and Malicious Activity
 
-After receiving the encrypted payload (and sender's identity public key), the recipient's connectivity interface forwards the data to its card. To consume the receipt, the card performs the following:
+Phonon deposits, transfers and withdrawals are all functions that lead to *immediate finality*. For example, transfers and withdrawals both **delete** the phonon from storage. If this is done by mistake, the phonon is gone forever. As such, there are several types of situations where a user could find himself in a bad situation.
 
-1. Validate that the sender's certificate matches the sender's identity public key and that the certificate signer is recognized (i.e. is the same one that signed the card's own certificate).
-2. Recreate standard ECDH secret, decrypt, and deserialize the payload.
-3. Recreate inner, salted secret. Decrypt and deserialize the payload.
-4. Save the phonon to internal storage.
+In this section we cover a few pitfalls, which all point to the fact that it is wise to transact with *relatively small values* in Phonon.
 
-### Checking Before Saving
+#### Malicious Recipients
 
-To avoid a situation where the sender first dispatched valid static phonon data but then send a bad phonon, there are two options for receiving a phonon packet for payment:
+Unlike networks like Ethereum and Bitcoin, there is no way to *prove* that a card received a phonon (besides interfacing with it directly, of course). This means that a sender could find himself in a situation where he sends an encrypted phonon payload and the recipient claims to have never received it (or claims that the encryption key was incorrect and the phonon could not be deserialized).
 
-1. Call `dryRunReceivePhonon()`, which does all of the steps above, but does **not** save the phonon to storage. This function returns the public key associated with the phonon as well as the static phonon data. The recipient can use this data to look up the phonon on the chain before committing receipt of it.
-2. Once the receipient is satisfied with the contents of the phonon, he can call `receivePhonon()` with the phonon packet, which *does* commit the phonon to storage.
+#### Malicious Senders
+
+Although Phonon prevents replay and double spend attacks, recipients must be diligent in being on the same page about network and token type. An unsuspecting recipient may, for instance, receive a phonon containing ETC (Ethereum Classic) tokens while expecting ETH (Ethereum) tokens. These would be indistinguishable, but for the network descriptor. 
+
+Of course this is not unique to Phonon and is something cryptocurrency users (or, more precisely, their wallet software) are likely already used to.
+
+#### Nonces and Salts
+
+As mentioned previously, it is extremely important that the user's Phonon interface software manages nonces and salts properly. If a user wishes to deposit 50 phonons to 50 sequential addresses, these must all be deposited in the proper order. This is because of the `globalNonce` discussed earlier. If phonon #5 is deposited before phonon #4, the nonce will be incremented and phonon #4 will be impossible to deposit.
+
+Similarly, if a user is expecting a phonon which will be encrypted based on a specific receipt salt, he must not re-use that salt. If Alice gives the public key corresponding to salt #1 to both Bob and Carol and each of them transfers a phonon out using it, only one of those phonons may be received. The other will be impossible to decrypt because the salt is deleted once it is used once.
