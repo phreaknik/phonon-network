@@ -39,7 +39,9 @@ Each phonon represents a non-fungible "packet" of tokens. It contains the follow
 
 # Provisioning a Card
 
-Phonon is designed to work with [Java cards](https://www.oracle.com/technetwork/java/embedded/javacard/overview/index.html). To initialize a Java card, you first need a card reader (e.g. [HID OMNIKEY](https://www.hidglobal.com/products/readers/omnikey) series). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus [Lattice1](https://gridplus.io/lattice). 
+Phonon is designed to work with [Java cards](https://www.oracle.com/technetwork/java/embedded/javacard/overview/index.html). To initialize a Java card, you first need a card reader (e.g. [HID OMNIKEY](https://www.hidglobal.com/products/readers/omnikey) series). While many variants exist, the Phonon Network is designed to *prefer* a secure interface, which exists in the GridPlus [Lattice1](https://gridplus.io/lattice).
+
+> NOTE: The following code snippets (and most card-based code/pseudocode in this document) is based on the [GridPlus SafeCard Applet](https://github.com/GridPlus/safe-card), which is itself a fork of the [Status Keycard Applet](https://github.com/status-im/status-keycard). The Phonon specification is applet-agnostic, but these applets should serve as good starting points for prospective Phonon implementors.
 
 ## Installing and Initializing the Applet
 
