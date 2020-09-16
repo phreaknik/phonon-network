@@ -60,6 +60,8 @@ A phonon terminal provides a physical interface to a phonon card, as well as com
 
 When receiving a phonon, it is important for the receiver to check that the phonon actually has assets locked up on the appropriate blockchain. For this reason, a terminal must also provide the ability to read the phonons on a card and check the value of those phonons on the appropriate network. See [Supported Assets](#32-supported-assets) for more information about supported asset types.
 
+See the [terminal specification](terminal-specification.md) for more detail about the functional design requirements of a phonon terminal.
+
 ### 3.1 Transfer Backends
 At this time, we specify the following transfer backends a terminal may choose to implement. More backends may be added in the future (brownie points to anyone who specs out a sneakernet remote backend :beers:):
 1) Local transfer between one external card and one card embedded internally to the terminal.
